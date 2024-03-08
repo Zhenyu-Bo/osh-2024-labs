@@ -15,14 +15,3 @@ std::vector<std::string> split(std::string& s, const std::string &d) {
     res.push_back(s.substr(start + d.size(),s.size() - 1 - start));
     return res;
 }
-
-int main()
-{
-    std::string s = "1,2,30";
-    std::string d = ",";
-    std::vector<std::string> res = split(s, d);
-    for (std::string str : res) {
-        std::cout << str << std::endl;
-    }
-    return 0;
-}
