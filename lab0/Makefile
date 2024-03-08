@@ -12,7 +12,7 @@ SRCS = bubblesort.cpp main.cpp
 $(TARGET): $(SRCS)
 	$(CC) $(CFLAGS) $(VERSION) -o $@ $^
 
-# 定义make debug
+# 定义make debug，编译时加入PRINT宏
 debug:
 	$(CC) $(CFLAGS) $(VERSION) $(DEBUG) -o $(TARGET) $(SRCS)
 
