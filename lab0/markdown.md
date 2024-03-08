@@ -2,7 +2,9 @@
 
 ## 图片引用
 
-![res](/src/result.png)
+![res](./src/result.png)
+
+
 
 ## 代码
 
@@ -20,6 +22,8 @@ int main() {
     return 0;
 }
 ```
+
+
 
 ## 数学公式
 
