@@ -18,4 +18,4 @@ debug:
 
 # 清理文件
 clean:
-	rm -r $(TARGET)
+	rm -f $(TARGET)
