@@ -6,13 +6,13 @@
 
 1. 直接编译
 
-   时间：3 min 41 s
+   时间：3 min 42 s
 
    大小：12.9MiB
 
 2. 先对`Gerenal setup`进行修改，删除`Automatically append information to the version string`，`POSIX Message Queues`，`Enable process_vm_readv/writev syscalls`。
 
-   时间：3 min 45 s
+   时间：3 min 42 s
 
    大小：12.8MiB
 
