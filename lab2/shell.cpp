@@ -58,17 +58,29 @@ int main() {
 
     if (args[0] == "pwd") {
       //std::cout << "To be done!\n";
-      char cwd[PATH_MAX];
+      char cwd[PATH_MAX]; // 存储当前工作目录
       if (getcwd(cwd, sizeof(cwd)) != nullptr) {
-        std::cout << cwd << std::endl;
+        std::cout << cwd << std::endl;// 输出当前工作目录
       } else {
-        std::cout << "getcwd failed\n";
+        std::cout << "getcwd failed\n";// 输出错误信息
       }
       continue;
     }
 
     if (args[0] == "cd") {
-      std::cout << "To be done!\n";
+      //std::cout << "To be done!\n";
+      if (args.size() <= 1 || args[1].find_first_not_of(' ') == std::string::npos) {
+        // cd 没有参数时，切换到家目录
+        chdir("/home");
+      }
+      else {
+        // cd 有参数时，切换到参数指定的目录，参数为 args[1]
+        // chdir(args[1].c_str());
+        // 若切换失败，输出错误信息
+        if (chdir(args[1].c_str()) != 0) {
+          std::cout << "cd failed\n";
+        }
+      }
       continue;
     }
 
