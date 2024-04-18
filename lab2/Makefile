@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-c -Wall
+CFLAGS=-c -Wall -g
 SOURCES=shell.cpp
 OBJECTS=$(SOURCES:.cpp=.o)
 EXECUTABLE=shell
