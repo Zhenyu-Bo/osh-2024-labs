@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
+std::string trim(std::string s);
 
 int main() {
   // 不同步 iostream 和 cstdio 的 buffer
@@ -131,4 +132,15 @@ std::vector<std::string> split(std::string s, const std::string &delimiter) {
   }
   res.push_back(s);
   return res;
+}
+
+std::string trim(std::string s)
+{
+  if (s.empty())
+    return "";
+  size_t first = s.find_first_not_of(' ');
+  if (first == std::string::npos)
+    return "";
+  size_t last = s.find_last_not_of(' ');
+  return s.substr(first, (last - first + 1));
 }
