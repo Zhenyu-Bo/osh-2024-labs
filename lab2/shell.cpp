@@ -73,6 +73,11 @@ int main() {
         // cd 没有参数时，切换到家目录
         chdir("/home");
       }
+      else if(args.size() > 2)
+      {
+        // cd 有多个参数时报错
+        std::cout << "too many arguments!\n" << std::endl;
+      }
       else {
         // cd 有参数时，切换到参数指定的目录，参数为 args[1]
         // chdir(args[1].c_str());
