@@ -96,14 +96,6 @@ int main() {
     // 处理外部命令
     pid_t pid = fork();
 
-    /*// std::vector<std::string> 转 char **
-    char *arg_ptrs[args.size() + 1];
-    for (auto i = 0; i < args.size(); i++) {
-    	arg_ptrs[i] = &args[i][0];
-    }
-    // exec p 系列的 argv 需要以 nullptr 结尾
-    arg_ptrs[args.size()] = nullptr;*/
-
     if (pid == 0) {
     // 这里只有子进程才会进入
     if(cmds.size() > 1)
@@ -116,7 +108,7 @@ int main() {
 
         for(int i = 0;i < cmds.size();i++)
         {
-            args = split(cmds[i]," ");
+            args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
             pid_t pid_1 = fork();
 
             if(pid_1 == 0)
@@ -134,16 +126,18 @@ int main() {
                 if(cmds.size() > 1)
                 {
                     if(i != 0)
-                    {
-                        dup2(fd[i-1][0], 0); // 
-                        close(fd[i-1][0]);
-                        close(fd[i-1][1]); // 关闭写端
+                    { 
+                        // 若不是第一个命令，则需要从上一个命令的管道读取数据
+                        dup2(fd[i-1][0], 0); // 将当前进程的标准输入重定向到上一个命令的管道读端
+                        close(fd[i-1][0]); // 关闭上一个命令的读端
+                        close(fd[i-1][1]); // 关闭上一个命令的写端
                     }
                     if(i != cmds.size()-1)
                     {
-                        dup2(fd[i][1], 1); // 
-                        close(fd[i][0]); // 关闭读端
-                        close(fd[i][1]);
+                        // 若不是最后一个命令，则需要将输出重定向到下一个命令的管道写端
+                        dup2(fd[i][1], 1); // 将当前进程的标准输出重定向到下一个命令的管道写端
+                        close(fd[i][0]); // 关闭当前进程的读端
+                        close(fd[i][1]); // 关闭当前进程的写端
                     }
                 }
                 // execvp 会完全更换子进程接下来的代码，所以正常情况下 execvp 之后这里的代码就没意义了
@@ -157,17 +151,18 @@ int main() {
             {
                 if(i != 0)
                 {
-                    close(fd[i-1][0]);
+                    // 关闭上一个命令的读端和写端，防止阻塞
+                    close(fd[i-1][0]); // 关闭读端
                     close(fd[i-1][1]); // 关闭写端
                 }
             }
         }
         if(cmds.size() > 1)
         {
-            close(fd[cmds.size()-2][1]);
+            close(fd[cmds.size()-2][1]); // 关闭最后一个管道的写端
         }
-        while(wait(NULL) > 0);
-        exit(0);
+        while(wait(NULL) > 0); // 等待所有子进程结束
+        exit(0); // 结束父进程
     }
         	
 
