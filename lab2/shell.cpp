@@ -279,5 +279,48 @@ void handleRedirection(std::vector<std::string>& args) {
             args[i] = " "; // 防止重定向文本被当作参数
             args[i+1] = " ";
         }
+        if(args[i] == "<<")
+        {
+            // EOF重定向
+            if(args[i+1] != "EOF")
+            {
+                std::cout << "EOF redirection Error\n";
+                continue;
+            }
+            char tmpfile[] = "/tmp/fileXXXXXX";
+            int fd = mkstemp(tmpfile);
+            if(fd < 0)
+            {
+                std::cout << "Redirection Error\n";
+            }
+            else
+            {
+                std::string text;
+                for(int j = i+2; j < args.size(); j++)
+                {
+                    if(args[j] == "EOF")
+                    {
+                        break;
+                    }
+                    text += args[j];
+                }
+                write(fd, text.c_str(), text.size());
+                lseek(fd, 0, SEEK_SET); // 重置文件指针到文件开始
+                dup2(fd, 0);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文本被当作参数
+            args[i+1] = " ";
+            // 清除下一个EOF之前的所有参数
+            for(int j = i+2; j < args.size(); j++)
+            {
+                if(args[j] == "EOF")
+                {
+                    args[j] = " ";
+                    break;
+                }
+                args[j] = " ";
+            }
+        }
     }
 }
