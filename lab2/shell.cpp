@@ -15,12 +15,28 @@
 
 #include <sys/fcntl.h>
 #include <unistd.h>
+// 信号处理
+#include <signal.h>
+
+#include <limits>
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
 std::string trim(std::string s);
 void handleRedirection(std::vector<std::string>& args);
+void handle_sigint(int sig);
 
 int main() {
+
+    // 信号处理
+    struct sigaction shell, child;// shell进程需要忽略SIGINT,子进程需要处理SIGINT
+
+    shell.sa_flags = 0;
+    shell.sa_handler = handle_sigint;
+    
+    // 在程序的一开始就忽略Ctr+C，否则此时输入Ctr+C会终止shell程序
+    sigaction(SIGINT,&shell,&child);
+    signal(SIGTTOU, SIG_IGN); // shell进程忽略Ctrl+C
+
 	// 不同步 iostream 和 cstdio 的 buffer
 	std::ios::sync_with_stdio(false);
 	
@@ -38,6 +54,8 @@ int main() {
     // 按" | "分割命令为单词
     std::vector<std::string> cmds = split(trim(cmd)," | ");
     int fd[cmds.size()-1][2]; // 用于pipe函数
+
+    
 
     // 没有可处理的命令
     if (args.empty()) {
@@ -102,6 +120,11 @@ int main() {
 
     if (pid == 0) {
         // 这里只有子进程才会进入
+
+        // 子进程不能忽略SIG_IGN，故需要恢复默认行为
+        sigaction(SIGINT,&child,nullptr);
+        signal(SIGTTOU,SIG_DFL);
+
         if(cmds.size() > 1)
         {
             for(size_t i = 0;i < cmds.size()-1;i++)
@@ -112,6 +135,7 @@ int main() {
 
         for(size_t i = 0;i < cmds.size();i++)
         {
+            
             args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
             pid_t pid_1 = fork();
 
@@ -176,13 +200,22 @@ int main() {
         }
         while(wait(NULL) > 0); // 等待所有子进程结束
         return 0; // 结束父进程
-    }
-        	
+    }	
 
     // 这里只有父进程（原进程）才会进入
-    int ret = wait(nullptr);
+    setpgid(pid,pid);// 将进程组id设置为子进程id
+    tcsetpgrp(0,pid);// 将前台进程组设置为子进程的进程组
+    int over;// 表示子进程是否结束
+    // 等待子进程pid结束
+    int ret = waitpid(pid, &over, 0);// 这里需要修改为waitpid，以知道子程序是正常结束还是因为接收到信号而结束
+    tcsetpgrp(0,getpgrp()); // 将前台进程组设置为shell进程的进程组
+    //int ret = wait(&over);
     if (ret < 0) {
       	std::cout << "wait failed";
+    }
+    else if(WIFSIGNALED(over)) {
+        // 子程序因接收到信号而结束时，需要输出换行符（正常结束时不需要做任何处理）
+        std::cout << std::endl;
     }
   }
 }
@@ -338,4 +371,14 @@ void handleRedirection(std::vector<std::string>& args) {
             }
         }
     }
+}
+
+void handle_sigint(int sig)
+{
+    // 清空输入流中的残留数据并重置输入流状态
+    std::cin.ignore(std::cin.rdbuf()->in_avail());
+    // 开始下一行
+    std::cout << "\n$ ";
+    // 清空输出缓冲区
+    std::cout.flush();
 }
