@@ -13,8 +13,11 @@
 // wait
 #include <sys/wait.h>
 
+#include <sys/fcntl.h>
+
 std::vector<std::string> split(std::string s, const std::string &delimiter);
 std::string trim(std::string s);
+void handleRedirection(std::vector<std::string>& args);
 
 int main() {
 	// 不同步 iostream 和 cstdio 的 buffer
@@ -97,14 +100,14 @@ int main() {
     pid_t pid = fork();
 
     if (pid == 0) {
-    // 这里只有子进程才会进入
-    if(cmds.size() > 1)
-    {
-        for(int i = 0;i < cmds.size()-1;i++)
+        // 这里只有子进程才会进入
+        if(cmds.size() > 1)
         {
-            pipe(fd[i]);// 建立管道
+            for(int i = 0;i < cmds.size()-1;i++)
+            {
+                pipe(fd[i]);// 建立管道
+            }
         }
-    }
 
         for(int i = 0;i < cmds.size();i++)
         {
@@ -115,14 +118,9 @@ int main() {
             {
                 // 处理外部命令
 
-                // std::vector<std::string> 转 char **
-                char *arg_ptrs[args.size() + 1];
-                for (auto i = 0; i < args.size(); i++) {
-                    arg_ptrs[i] = &args[i][0];
-                }
-                // exec p 系列的 argv 需要以 nullptr 结尾
-                arg_ptrs[args.size()] = nullptr;
+                
 
+                //handleRedirection(args);
                 if(cmds.size() > 1)
                 {
                     if(i != 0)
@@ -135,11 +133,27 @@ int main() {
                     if(i != cmds.size()-1)
                     {
                         // 若不是最后一个命令，则需要将输出重定向到下一个命令的管道写端
+                        // 这里的写端是在描述数据流的方向。当前进程将数据写入 fd[i][1]
+                        // 虽然 fd[i][1] 是由当前进程创建和写入的，但从数据流的角度来看，它可以被视为下一个命令的写端
                         dup2(fd[i][1], 1); // 将当前进程的标准输出重定向到下一个命令的管道写端
                         close(fd[i][0]); // 关闭当前进程的读端
                         close(fd[i][1]); // 关闭当前进程的写端
                     }
+                    
                 }
+                handleRedirection(args);
+
+                // std::vector<std::string> 转 char **
+                int j = 0;
+                char *arg_ptrs[args.size() + 1];
+                for (auto i = 0; i < args.size(); i++) {
+                    if(args[i] != " ") // 在处理重定向时，将args[i] == ">",">>","<"的项都转换成了空格
+                        arg_ptrs[j++] = &args[i][0];
+                }
+                
+                // exec p 系列的 argv 需要以 nullptr 结尾
+                //arg_ptrs[args.size()] = nullptr;
+                arg_ptrs[j] = nullptr;
                 // execvp 会完全更换子进程接下来的代码，所以正常情况下 execvp 之后这里的代码就没意义了
                 // 如果 execvp 之后的代码被运行了，那就是 execvp 出问题了
                 execvp(args[0].c_str(), arg_ptrs);
@@ -198,4 +212,46 @@ std::string trim(std::string s)
     	return "";
   	size_t last = s.find_last_not_of(' ');
   	return s.substr(first, (last - first + 1));
+}
+
+void handleRedirection(std::vector<std::string>& args) {
+    for (int i = 0; i < args.size(); i++) 
+    {
+        if (args[i] == ">") 
+        {
+            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
+            if(fd < 0)  
+                std::cout << "Redirection Error\n";
+            else
+            {
+                dup2(fd, 1);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文件名被当作参数
+        } 
+        else if (args[i] == ">>") 
+        {
+            int fd = open(args[i+1].c_str(), O_CREAT | O_APPEND | O_WRONLY, 0777);
+            if(fd < 0)  
+                std::cout << "Redirection Error\n";
+            else
+            {
+                dup2(fd, 1);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文件名被当作参数
+        } 
+        else if (args[i] == "<") 
+        {
+            int fd = open(args[i+1].c_str(),  O_RDONLY);
+            if(fd < 0)  
+                std::cout << "Redirection Error\n";
+            else
+            {
+                dup2(fd, 0);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文件名被当作参数
+        }
+    }
 }
