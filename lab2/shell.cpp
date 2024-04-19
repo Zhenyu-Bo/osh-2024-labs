@@ -104,13 +104,13 @@ int main() {
         // 这里只有子进程才会进入
         if(cmds.size() > 1)
         {
-            for(int i = 0;i < cmds.size()-1;i++)
+            for(size_t i = 0;i < cmds.size()-1;i++)
             {
                 pipe(fd[i]);// 建立管道
             }
         }
 
-        for(int i = 0;i < cmds.size();i++)
+        for(size_t i = 0;i < cmds.size();i++)
         {
             args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
             pid_t pid_1 = fork();
@@ -145,7 +145,7 @@ int main() {
                 // std::vector<std::string> 转 char **
                 int j = 0;
                 char *arg_ptrs[args.size() + 1];
-                for (auto i = 0; i < args.size(); i++) {
+                for (size_t i = 0; i < args.size(); i++) {
                     if(args[i] != " ") // 在处理重定向时，将args[i] == ">",">>","<"的项都转换成了空格,所以这里要将这些空格忽略
                         arg_ptrs[j++] = &args[i][0];
                 }
@@ -214,7 +214,7 @@ std::string trim(std::string s)
 }
 
 void handleRedirection(std::vector<std::string>& args) {
-    for (int i = 0; i < args.size(); i++) 
+    for (size_t i = 0; i < args.size(); i++) 
     {
         if (args[i] == ">>") 
         {
@@ -244,6 +244,21 @@ void handleRedirection(std::vector<std::string>& args) {
             args[i] = " "; // 防止重定向文件名被当作参数
             args[i+1] = " ";
         } 
+        if (args[i].find(">") != std::string::npos && args[i] != ">")
+        {
+            // 处理数字文件重定向
+            int fd_num = std::stoi(args[i].substr(0, args[i].find(">")));
+            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
+            if(fd < 0)  
+                std::cout << "Redirection Error\n";
+            else
+            {
+                dup2(fd, fd_num);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文件名被当作参数
+            args[i+1] = " ";
+        }
         if (args[i] == "<") 
         {
             //std::cout << args[i] << " " << args[i+1] << std::endl;
@@ -296,7 +311,7 @@ void handleRedirection(std::vector<std::string>& args) {
             else
             {
                 std::string text;
-                for(int j = i+2; j < args.size(); j++)
+                for(size_t j = i+2; j < args.size(); j++)
                 {
                     if(args[j] == "EOF")
                     {
@@ -312,7 +327,7 @@ void handleRedirection(std::vector<std::string>& args) {
             args[i] = " "; // 防止重定向文本被当作参数
             args[i+1] = " ";
             // 清除下一个EOF之前的所有参数
-            for(int j = i+2; j < args.size(); j++)
+            for(size_t j = i+2; j < args.size(); j++)
             {
                 if(args[j] == "EOF")
                 {
