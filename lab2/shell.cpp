@@ -14,6 +14,7 @@
 #include <sys/wait.h>
 
 #include <sys/fcntl.h>
+#include <unistd.h>
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
 std::string trim(std::string s);
@@ -217,7 +218,7 @@ void handleRedirection(std::vector<std::string>& args) {
     {
         if (args[i] == ">>") 
         {
-            std::cout << args[i] << " " << args[i+1] << std::endl;
+            //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(), O_CREAT | O_APPEND | O_WRONLY, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
@@ -231,8 +232,7 @@ void handleRedirection(std::vector<std::string>& args) {
         } 
         if (args[i] == ">") 
         {
-            for(int j = i;j < args.size();j++)
-                std::cout << args[j] << std::endl;
+            //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
@@ -246,7 +246,7 @@ void handleRedirection(std::vector<std::string>& args) {
         } 
         if (args[i] == "<") 
         {
-            std::cout << args[i] << " " << args[i+1] << std::endl;
+            //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(),  O_RDONLY);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
@@ -256,6 +256,27 @@ void handleRedirection(std::vector<std::string>& args) {
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
+            args[i+1] = " ";
+        }
+        if(args[i] == "<<<")
+        {
+            // 文本重定向
+            //std::cout << args[i] << " " << args[i+1] << std::endl;
+            char tmpfile[] = "/tmp/fileXXXXXX";// 创建临时文件
+            int fd = mkstemp(tmpfile);// 返回临时文件的文件描述符
+            if(fd < 0)
+            {
+                std::cout << "Redirection Error\n";
+            }
+            else
+            {
+                std::string text = args[i+1] + "\n";
+                write(fd, text.c_str(), text.size());
+                lseek(fd, 0, SEEK_SET); // 重置文件指针到文件开始
+                dup2(fd, 0);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文本被当作参数
             args[i+1] = " ";
         }
     }
