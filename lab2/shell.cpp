@@ -118,8 +118,6 @@ int main() {
             {
                 // 处理外部命令
 
-                
-
                 //handleRedirection(args);
                 if(cmds.size() > 1)
                 {
@@ -147,10 +145,10 @@ int main() {
                 int j = 0;
                 char *arg_ptrs[args.size() + 1];
                 for (auto i = 0; i < args.size(); i++) {
-                    if(args[i] != " ") // 在处理重定向时，将args[i] == ">",">>","<"的项都转换成了空格
+                    if(args[i] != " ") // 在处理重定向时，将args[i] == ">",">>","<"的项都转换成了空格,所以这里要将这些空格忽略
                         arg_ptrs[j++] = &args[i][0];
                 }
-                
+                //std::cout<< "j = " << j << ", args.size() = " << args.size() << std::endl;
                 // exec p 系列的 argv 需要以 nullptr 结尾
                 //arg_ptrs[args.size()] = nullptr;
                 arg_ptrs[j] = nullptr;
@@ -176,7 +174,7 @@ int main() {
             close(fd[cmds.size()-2][1]); // 关闭最后一个管道的写端
         }
         while(wait(NULL) > 0); // 等待所有子进程结束
-        exit(0); // 结束父进程
+        return 0; // 结束父进程
     }
         	
 
@@ -217,20 +215,9 @@ std::string trim(std::string s)
 void handleRedirection(std::vector<std::string>& args) {
     for (int i = 0; i < args.size(); i++) 
     {
-        if (args[i] == ">") 
+        if (args[i] == ">>") 
         {
-            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
-            if(fd < 0)  
-                std::cout << "Redirection Error\n";
-            else
-            {
-                dup2(fd, 1);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文件名被当作参数
-        } 
-        else if (args[i] == ">>") 
-        {
+            std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(), O_CREAT | O_APPEND | O_WRONLY, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
@@ -240,9 +227,26 @@ void handleRedirection(std::vector<std::string>& args) {
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
+            args[i+1] = " ";
         } 
-        else if (args[i] == "<") 
+        if (args[i] == ">") 
         {
+            for(int j = i;j < args.size();j++)
+                std::cout << args[j] << std::endl;
+            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
+            if(fd < 0)  
+                std::cout << "Redirection Error\n";
+            else
+            {
+                dup2(fd, 1);
+                close(fd);
+            }
+            args[i] = " "; // 防止重定向文件名被当作参数
+            args[i+1] = " ";
+        } 
+        if (args[i] == "<") 
+        {
+            std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(),  O_RDONLY);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
@@ -252,6 +256,7 @@ void handleRedirection(std::vector<std::string>& args) {
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
+            args[i+1] = " ";
         }
     }
 }
