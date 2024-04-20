@@ -1,384 +1,552 @@
-// IO
-#include <iostream>
-// std::string
-#include <string>
-// std::vector
-#include <vector>
-// std::string 转 int
-#include <sstream>
-// PATH_MAX 等常量
-#include <climits>
-// POSIX API
-#include <unistd.h>
-// wait
-#include <sys/wait.h>
+#include <climits>    // PATH_MAX 等常量
+#include <fcntl.h>    // 重定向中open
+#include <iostream>   // IO
+#include <pwd.h>      // 用于获取用户
+#include <signal.h>   // 处理信号
+#include <sstream>    // std::string 转 int
+#include <stdlib.h>   // 文本重定向临时文件
+#include <string>     // std::string
+#include <sys/wait.h> // wait
+#include <unistd.h>   // POSIX API
+#include <vector>     // std::vector
 
-#include <sys/fcntl.h>
-#include <unistd.h>
-// 信号处理
-#include <signal.h>
+#define READ_END 0
+#define WRITE_END 1
+#define HERE_STR -1
 
-#include <limits>
+class job {
+public:
+    int id;
+    std::vector<pid_t> pids;
+    std::string cmd;
+
+    job(int id, std::string cmd) : id(id), cmd(cmd) {}
+};
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
-std::string trim(std::string s);
-void handleRedirection(std::vector<std::string>& args);
-void handle_sigint(int sig);
+void trim(std::string &line);
+void format(std::string &line);
+void extend(std::vector<std::string> &args, char *home);
+void printcwd(void);
+void pwd(const std::vector<std::string> &args);
+void wait(const std::vector<std::string> &args, std::vector<job> &bg_jobs);
+void kill_bg(std::vector<job> &bg_jobs);
+void cd(std::vector<std::string> &args, const char *home);
+void exec(std::string &cmd, char *home);
+void redirect(std::string &cmd, const std::string &redir, const int &originfd, const int &flag, const mode_t &mode = 0);
+void redirect_parse(std::string &cmd, const std::size_t &pos, std::string &filename, int &redirfd, int len);
+void handler(int signum);
 
 int main() {
+    // 不同步 iostream 和 cstdio 的 buffer
+    std::ios::sync_with_stdio(false);
 
-    // 信号处理
-    struct sigaction shell, child;// shell进程需要忽略SIGINT,子进程需要处理SIGINT
+    // 用来存储读入的一行命令
+    std::string cmd;
 
-    shell.sa_flags = 0;
-    shell.sa_handler = handle_sigint;
-    
-    // 在程序的一开始就忽略Ctr+C，否则此时输入Ctr+C会终止shell程序
-    sigaction(SIGINT,&shell,&child);
-    signal(SIGTTOU, SIG_IGN); // shell进程忽略Ctrl+C
+    // 用来存储后台进程
+    std::vector<job> bg_jobs;
 
-	// 不同步 iostream 和 cstdio 的 buffer
-	std::ios::sync_with_stdio(false);
-	
-	// 用来存储读入的一行命令
-	std::string cmd;
-	while (true) {
-	// 打印提示符
-    std::cout << "$ ";
-
-    // 读入一行。std::getline 结果不包含换行符。
-    std::getline(std::cin, cmd);
-
-    // 按空格分割命令为单词
-    std::vector<std::string> args = split(cmd, " ");
-    // 按" | "分割命令为单词
-    std::vector<std::string> cmds = split(trim(cmd)," | ");
-    int fd[cmds.size()-1][2]; // 用于pipe函数
-
-    
-
-    // 没有可处理的命令
-    if (args.empty()) {
-		continue;
+    // 用于替换路径中的'~'
+    char *home = getenv("HOME");
+    if (home == nullptr) {
+        home = getpwuid(getuid())->pw_dir;
     }
 
-    // 退出
-    if (args[0] == "exit") {
-		if (args.size() <= 1) {
-			return 0;
-      	}
+    struct sigaction ignore, handle, dfl;
+    ignore.sa_flags = 0;
+    ignore.sa_handler = SIG_IGN;
+    handle.sa_flags = 0;
+    handle.sa_handler = handler;
+    dfl.sa_flags = 0;
+    dfl.sa_handler = SIG_DFL;
 
-    	// std::string 转 int
-    	std::stringstream code_stream(args[1]);
-    	int code = 0;
-    	code_stream >> code;
+    sigaction(SIGINT, &handle, nullptr);
+    while (true) {
+        printcwd();
+        // 打印提示符
+        std::cout << " # ";
 
-    	// 转换失败
-    	if (!code_stream.eof() || code_stream.fail()) {
-		std::cout << "Invalid exit code\n";
-        continue;
-    	}
+        // 读入一行。std::getline 结果不包含换行符。
+        std::getline(std::cin, cmd);
 
-    	return code;
-    }
-
-    if (args[0] == "pwd") {
-    	//std::cout << "To be done!\n";
-    	char cwd[PATH_MAX]; // 存储当前工作目录
-    	if (getcwd(cwd, sizeof(cwd)) != nullptr) {
-    		std::cout << cwd << std::endl;// 输出当前工作目录
-    	} else {
-    		std::cout << "getcwd failed\n";// 输出错误信息
-    	}
-    	continue;
-    }
-
-    if (args[0] == "cd") {
-    	//std::cout << "To be done!\n";
-    	if (args.size() <= 1 || args[1].find_first_not_of(' ') == std::string::npos) {
-    		// cd 没有参数时，切换到家目录
-        	chdir("/home");
-    	}
-    	else if(args.size() > 2)
-    	{
-        	// cd 有多个参数时报错
-        	std::cout << "Too many arguments!\n" << std::endl;
-    	}
-    	else {
-        	// cd 有参数时，切换到参数指定的目录，参数为 args[1]
-        	// chdir(args[1].c_str());
-        	// 若切换失败，输出错误信息
-        	if (chdir(args[1].c_str()) != 0) {
-        		std::cout << "cd failed\n";
-        	}
-    	}
-    	continue;
-    }
-
-    // 处理外部命令
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        // 这里只有子进程才会进入
-
-        // 子进程不能忽略SIG_IGN，故需要恢复默认行为
-        sigaction(SIGINT,&child,nullptr);
-        signal(SIGTTOU,SIG_DFL);
-
-        if(cmds.size() > 1)
-        {
-            for(size_t i = 0;i < cmds.size()-1;i++)
-            {
-                pipe(fd[i]);// 建立管道
-            }
+        if (std::cin.eof()) {
+            std::cout << std::endl
+                      << "exit" << std::endl;
+            return 0;
         }
 
-        for(size_t i = 0;i < cmds.size();i++)
-        {
-            
-            args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
-            pid_t pid_1 = fork();
+        // 命令格式化
+        format(cmd);
 
-            if(pid_1 == 0)
-            {
-                // 处理外部命令
+        // 按空格分割命令为单词
+        std::vector<std::string> args = split(cmd, " ");
 
-                //handleRedirection(args);
-                if(cmds.size() > 1)
-                {
-                    if(i != 0)
-                    { 
-                        // 若不是第一个命令，则需要从上一个命令的管道读取数据
-                        dup2(fd[i-1][0], 0); // 将当前进程的标准输入重定向到上一个命令的管道读端
-                        close(fd[i-1][0]); // 关闭上一个命令的读端
-                        close(fd[i-1][1]); // 关闭上一个命令的写端
+        // 没有可处理的命令
+        if (args.empty()) {
+            continue;
+        }
+
+        // 退出
+        if (args[0] == "exit") {
+            if (args.size() <= 1) {
+                return 0;
+            }
+
+            // std::string 转 int
+            std::stringstream code_stream(args[1]);
+            int code = 0;
+            code_stream >> code;
+
+            // 转换失败
+            if (!code_stream.eof() || code_stream.fail()) {
+                std::cout << "Invalid exit code\n";
+                continue;
+            }
+
+            return code;
+        }
+
+        // 处理pwd命令
+        if (args[0] == "pwd") {
+            pwd(args);
+            continue;
+        }
+
+        if (args[0] == "wait") {
+            wait(args, bg_jobs);
+            continue;
+        }
+
+        extend(args, home);
+
+        // 处理cd命令
+        if (args[0] == "cd") {
+            cd(args, home);
+            continue;
+        }
+
+        // 处理&符号
+        bool is_bg = cmd.back() == '&';
+        if (is_bg) {
+            cmd.pop_back();
+            trim(cmd);
+        }
+        // 根据管道分割命令
+        std::vector<std::string> cmds = split(cmd, "|");
+        // 管道数量
+        int pipe_num = cmds.size() - 1;
+
+        // 处理外部命令
+        if (pipe_num > 0) {
+            // 存在管道
+            int pipefd[pipe_num][2];
+            // 管道进程组ID
+            pid_t pipegrpid;
+            job jobs = job(bg_jobs.size() + 1, cmd);
+            for (int i = 0; i < pipe_num; i++) {
+                if (pipe(pipefd[i]) == -1) {
+                    std::cout << "pipe failed" << std::endl;
+                    exit(255);
+                }
+            }
+            for (int i = 0; i < pipe_num + 1; i++) {
+                pid_t cpid = fork();
+                if (cpid < 0) {
+                    std::cout << "fork failed" << std::endl;
+                    exit(255);
+                } else if (cpid == 0) {
+                    // 输出重定向
+                    if (i == 0) {
+                        // 管道进程组ID为第一个子进程ID
+                        pipegrpid = getpid();
+                        // 第一个子进程输入来自标准输入
+                        dup2(pipefd[i][WRITE_END], STDOUT_FILENO);
+                    } else if (i == pipe_num) {
+                        // 最后一个子进程输出到标准输出
+                        dup2(pipefd[i - 1][READ_END], STDIN_FILENO);
+                    } else {
+                        // 其余进程输入输出都是管道
+                        dup2(pipefd[i - 1][READ_END], STDIN_FILENO);
+                        dup2(pipefd[i][WRITE_END], STDOUT_FILENO);
                     }
-                    if(i != cmds.size()-1)
-                    {
-                        // 若不是最后一个命令，则需要将输出重定向到下一个命令的管道写端
-                        // 这里的写端是在描述数据流的方向。当前进程将数据写入 fd[i][1]
-                        // 虽然 fd[i][1] 是由当前进程创建和写入的，但从数据流的角度来看，它可以被视为下一个命令的写端
-                        dup2(fd[i][1], 1); // 将当前进程的标准输出重定向到下一个命令的管道写端
-                        close(fd[i][0]); // 关闭当前进程的读端
-                        close(fd[i][1]); // 关闭当前进程的写端
+                    // 进程组分离
+                    setpgid(getpid(), pipegrpid);
+
+                    if (is_bg) {
+                        sigaction(SIGINT, &ignore, nullptr);
+                        sigaction(SIGTTOU, &ignore, nullptr);
+                        tcsetpgrp(0, getppid());
+                    } else {
+                        sigaction(SIGINT, &dfl, nullptr);
+                        sigaction(SIGTTOU, &dfl, nullptr);
                     }
-                    
-                }
-                handleRedirection(args);
 
-                // std::vector<std::string> 转 char **
-                int j = 0;
-                char *arg_ptrs[args.size() + 1];
-                for (size_t i = 0; i < args.size(); i++) {
-                    if(args[i] != " ") // 在处理重定向时，将args[i] == ">",">>","<"的项都转换成了空格,所以这里要将这些空格忽略
-                        arg_ptrs[j++] = &args[i][0];
+                    exec(cmds[i], home);
                 }
-                //std::cout<< "j = " << j << ", args.size() = " << args.size() << std::endl;
-                // exec p 系列的 argv 需要以 nullptr 结尾
-                //arg_ptrs[args.size()] = nullptr;
-                arg_ptrs[j] = nullptr;
-                // execvp 会完全更换子进程接下来的代码，所以正常情况下 execvp 之后这里的代码就没意义了
-                // 如果 execvp 之后的代码被运行了，那就是 execvp 出问题了
-                execvp(args[0].c_str(), arg_ptrs);
 
-                // 所以这里直接报错
-                exit(255);
+                if (i == 0) {
+                    // 第一个子进程ID为管道进程组ID
+                    pipegrpid = cpid;
+                    // 第一个进程关闭原本的标准输出
+                    close(pipefd[i][WRITE_END]);
+                } else if (i == pipe_num) {
+                    // 最后一个进程关闭原本的标准输入
+                    close(pipefd[i - 1][READ_END]);
+                } else {
+                    // 其余进程关闭原本的标准输入和输出
+                    close(pipefd[i - 1][READ_END]);
+                    close(pipefd[i][WRITE_END]);
+                }
+
+                jobs.pids.push_back(cpid);
+
+                // 进程组分离
+                setpgid(cpid, pipegrpid);
             }
-            else
-            {
-                if(i != 0)
-                {
-                    // 关闭上一个命令的读端和写端，防止阻塞
-                    close(fd[i-1][0]); // 关闭读端
-                    close(fd[i-1][1]); // 关闭写端
+
+            if (is_bg) {
+                tcsetpgrp(0, getpgrp());
+                std::cout << "[" << bg_jobs.size() + 1 << "] " << pipegrpid << std::endl;
+                bg_jobs.push_back(jobs);
+            } else {
+                // 将管道进程组调到前台
+                tcsetpgrp(0, pipegrpid);
+                sigaction(SIGTTOU, &ignore, nullptr);
+
+                // 等待所有子进程结束
+                int status;
+                for (int i = 0; i <= pipe_num; i++) {
+                    int ret = waitpid(jobs.pids[i], &status, 0);
+                    if (ret < 0) {
+                        std::cout << "waitpid failed" << std::endl;
+                        exit(255);
+                    }
+                }
+
+                tcsetpgrp(0, getpgrp());
+
+                if (!WIFEXITED(status)) {
+                    std::cout << std::endl;
+                }
+            }
+        } else {
+            // 不存在管道
+            pid_t pid = fork();
+
+            if (pid < 0) {
+                std::cout << "fork failed" << std::endl;
+            } else if (pid == 0) {
+                // 这里只有子进程才会进入
+
+                // 子进程与父进程分离
+                setpgrp();
+
+                if (is_bg) {
+                    sigaction(SIGINT, &ignore, nullptr);
+                    sigaction(SIGTTOU, &ignore, nullptr);
+                    tcsetpgrp(0, getppid());
+                } else {
+                    sigaction(SIGINT, &dfl, nullptr);
+                    sigaction(SIGTTOU, &dfl, nullptr);
+                }
+
+                exec(cmds[0], home);
+            }
+            // 这里只有父进程（原进程）才会进入
+
+            if (is_bg) {
+                // 后台运行
+                tcsetpgrp(0, getpgrp());
+                std::cout << "[" << bg_jobs.size() + 1 << "] " << pid << std::endl;
+                job bg_job = job(bg_jobs.size() + 1, cmd);
+                bg_job.pids.push_back(pid);
+                bg_jobs.push_back(bg_job);
+            } else {
+                // 防止先走父进程，子进程与父进程分离
+                setpgid(pid, pid);
+
+                // 将子进程调到前台
+                tcsetpgrp(0, pid);
+                sigaction(SIGTTOU, &ignore, nullptr);
+
+                int status;
+                int ret = waitpid(pid, &status, 0);
+                if (ret < 0) {
+                    std::cout << "wait failed" << std::endl;
+                    exit(255);
+                }
+                tcsetpgrp(0, getpgrp());
+                if (!WIFEXITED(status)) {
+                    std::cout << std::endl;
                 }
             }
         }
-        if(cmds.size() > 1)
-        {
-            close(fd[cmds.size()-2][1]); // 关闭最后一个管道的写端
-        }
-        while(wait(NULL) > 0); // 等待所有子进程结束
-        return 0; // 结束父进程
-    }	
-
-    // 这里只有父进程（原进程）才会进入
-    setpgid(pid,pid);// 将进程组id设置为子进程id
-    tcsetpgrp(0,pid);// 将前台进程组设置为子进程的进程组
-    int over;// 表示子进程是否结束
-    // 等待子进程pid结束
-    int ret = waitpid(pid, &over, 0);// 这里需要修改为waitpid，以知道子程序是正常结束还是因为接收到信号而结束
-    tcsetpgrp(0,getpgrp()); // 将前台进程组设置为shell进程的进程组
-    //int ret = wait(&over);
-    if (ret < 0) {
-      	std::cout << "wait failed";
+        // 处理后台进程
+        kill_bg(bg_jobs);
     }
-    else if(WIFSIGNALED(over)) {
-        // 子程序因接收到信号而结束时，需要输出换行符（正常结束时不需要做任何处理）
-        std::cout << std::endl;
-    }
-  }
 }
 
 // 经典的 cpp string split 实现
 // https://stackoverflow.com/a/14266139/11691878
 std::vector<std::string> split(std::string s, const std::string &delimiter) {
-  	std::vector<std::string> res;
-  	size_t pos = 0;
-  	std::string token;
-  	while ((pos = s.find(delimiter)) != std::string::npos) {
-    	token = s.substr(0, pos);
-    	res.push_back(token);
-    	s = s.substr(pos + delimiter.length());
-  	}
-  	res.push_back(s);
-  	return res;
+    std::vector<std::string> res;
+    size_t pos = 0;
+    std::string token;
+    while ((pos = s.find(delimiter)) != std::string::npos) {
+        token = s.substr(0, pos);
+        res.push_back(token);
+        s = s.substr(pos + delimiter.length());
+    }
+    res.push_back(s);
+    return res;
 }
 
-std::string trim(std::string s)
-{
-  	if (s.empty())
-    	return "";
-  	size_t first = s.find_first_not_of(' ');
-  	if (first == std::string::npos)
-    	return "";
-  	size_t last = s.find_last_not_of(' ');
-  	return s.substr(first, (last - first + 1));
+// 去除line前后空格
+void trim(std::string &line) {
+    int lPos = line.find_first_not_of(' ');
+    if (lPos == -1) {
+        // 整行均为' '
+        line.replace(0, line.length(), "");
+        return;
+    }
+    int rPos = line.find_last_not_of(' ');
+    line.replace(0, line.length(), line.substr(lPos, rPos - lPos + 1));
+    return;
 }
 
-void handleRedirection(std::vector<std::string>& args) {
-    for (size_t i = 0; i < args.size(); i++) 
-    {
-        if (args[i] == ">>") 
-        {
-            //std::cout << args[i] << " " << args[i+1] << std::endl;
-            int fd = open(args[i+1].c_str(), O_CREAT | O_APPEND | O_WRONLY, 0777);
-            if(fd < 0)  
-                std::cout << "Redirection Error\n";
-            else
-            {
-                dup2(fd, 1);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文件名被当作参数
-            args[i+1] = " ";
-        } 
-        if (args[i] == ">") 
-        {
-            //std::cout << args[i] << " " << args[i+1] << std::endl;
-            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
-            if(fd < 0)  
-                std::cout << "Redirection Error\n";
-            else
-            {
-                dup2(fd, 1);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文件名被当作参数
-            args[i+1] = " ";
-        } 
-        if (args[i].find(">") != std::string::npos && args[i] != ">")
-        {
-            // 处理数字文件重定向
-            int fd_num = std::stoi(args[i].substr(0, args[i].find(">")));
-            int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
-            if(fd < 0)  
-                std::cout << "Redirection Error\n";
-            else
-            {
-                dup2(fd, fd_num);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文件名被当作参数
-            args[i+1] = " ";
+// 命令行格式化
+void format(std::string &line) {
+    std::string replace_list = {'\t', '\n', '\r', '\f', '\v'};
+    std::string::size_type pos;
+    if (line.find('#') != std::string::npos) {
+        line = line.substr(0, line.find('#'));
+    }
+    for (auto i : replace_list) {
+        while ((pos = line.find(i)) != std::string::npos) {
+            line.replace(pos, 1, " ");
         }
-        if (args[i] == "<") 
-        {
-            //std::cout << args[i] << " " << args[i+1] << std::endl;
-            int fd = open(args[i+1].c_str(),  O_RDONLY);
-            if(fd < 0)  
-                std::cout << "Redirection Error\n";
-            else
-            {
-                dup2(fd, 0);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文件名被当作参数
-            args[i+1] = " ";
-        }
-        if(args[i] == "<<<")
-        {
-            // 文本重定向
-            //std::cout << args[i] << " " << args[i+1] << std::endl;
-            char tmpfile[] = "/tmp/fileXXXXXX";// 创建临时文件
-            int fd = mkstemp(tmpfile);// 返回临时文件的文件描述符
-            if(fd < 0)
-            {
-                std::cout << "Redirection Error\n";
-            }
-            else
-            {
-                std::string text = args[i+1] + "\n";
-                write(fd, text.c_str(), text.size());
-                lseek(fd, 0, SEEK_SET); // 重置文件指针到文件开始
-                dup2(fd, 0);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文本被当作参数
-            args[i+1] = " ";
-        }
-        if(args[i] == "<<")
-        {
-            // EOF重定向
-            if(args[i+1] != "EOF")
-            {
-                std::cout << "EOF redirection Error\n";
-                continue;
-            }
-            char tmpfile[] = "/tmp/fileXXXXXX";
-            int fd = mkstemp(tmpfile);
-            if(fd < 0)
-            {
-                std::cout << "Redirection Error\n";
-            }
-            else
-            {
-                std::string text;
-                for(size_t j = i+2; j < args.size(); j++)
-                {
-                    if(args[j] == "EOF")
-                    {
-                        break;
-                    }
-                    text += args[j];
+    }
+    while ((pos = line.find("  ")) != std::string::npos) {
+        line.replace(pos, 2, " ");
+    }
+    trim(line);
+    return;
+}
+
+// 符号扩展
+void extend(std::vector<std::string> &args, char *home) {
+    for (std::size_t i = 0; i < args.size(); i++) {
+        if (args[i].substr(0, 1) == "$") {
+            // 替换环境变量
+            size_t pos = args[i].find_first_of('/');
+            if (pos == std::string::npos) {
+                char *param = getenv(&(args[i].substr(1, args[i].length() - 1)[0]));
+                if (param == nullptr) {
+                    args[i].replace(0, args[i].length(), " ");
+                } else {
+                    args[i].replace(0, args[i].length(), param);
                 }
-                write(fd, text.c_str(), text.size());
-                lseek(fd, 0, SEEK_SET); // 重置文件指针到文件开始
-                dup2(fd, 0);
-                close(fd);
-            }
-            args[i] = " "; // 防止重定向文本被当作参数
-            args[i+1] = " ";
-            // 清除下一个EOF之前的所有参数
-            for(size_t j = i+2; j < args.size(); j++)
-            {
-                if(args[j] == "EOF")
-                {
-                    args[j] = " ";
-                    break;
+            } else {
+                char *param = getenv(getenv(&(args[i].substr(1, pos - 1)[0])));
+                if (param == nullptr) {
+                    args[i].replace(0, pos, " ");
+                } else {
+                    args[i].replace(0, pos, param);
                 }
-                args[j] = " ";
+            }
+        } else if (args[i].substr(0, 2) == "~/" || args[i] == "~") {
+            // 替换 ~
+            args[i].replace(0, 1, std::string(home));
+        } else if (args[i].substr(0, 1) == "~") {
+            // ~拓展
+            size_t pos = args[i].find_first_of('/');
+            if (pos == std::string::npos) {
+                args[i].replace(0, args[i].length(), getpwnam(&(args[i].substr(1, args[i].length() - 1))[0])->pw_dir);
+            } else {
+                args[i].replace(0, pos, getpwnam(&(args[i].substr(1, pos - 1))[0])->pw_dir);
             }
         }
     }
+    return;
 }
 
-void handle_sigint(int sig)
-{
-    // 清空输入流中的残留数据并重置输入流状态
-    std::cin.ignore(std::cin.rdbuf()->in_avail());
-    // 开始下一行
-    std::cout << "\n$ ";
-    // 清空输出缓冲区
-    std::cout.flush();
+// 输出当前路径
+void printcwd(void) {
+    char *buf = new char[PATH_MAX + 1];
+    int size = PATH_MAX;
+    while (getcwd(buf, size) == nullptr) {
+        delete[] buf;
+        size += PATH_MAX;
+        buf = new char[size];
+    }
+    std::cout << buf;
+    delete[] buf;
+    return;
 }
+
+// pwd 命令
+void pwd(const std::vector<std::string> &args) {
+    if (args.size() > 1) {
+        std::cout << "pwd: invalid argument number" << std::endl;
+        return;
+    }
+    printcwd();
+    std::cout << std::endl;
+    return;
+}
+
+// wait 命令
+void wait(const std::vector<std::string> &args, std::vector<job> &bg_jobs) {
+    if (args.size() > 1) {
+        std::cout << "wait: invalid argument number" << std::endl;
+        return;
+    }
+    if (!bg_jobs.empty()) {
+        for (auto &i : bg_jobs) {
+            for (size_t j = 0; j < i.pids.size(); j++) {
+                waitpid(i.pids[j], nullptr, 0);
+            }
+            std::cout << "[" << i.id << "]"
+                      << " Done    " << i.cmd << std::endl;
+        }
+        bg_jobs.clear();
+    }
+    return;
+}
+
+// 处理后台进程
+void kill_bg(std::vector<job> &bg_jobs) {
+    if (!bg_jobs.empty()) {
+        for (size_t i = 0; i < bg_jobs.size(); i++) {
+            for (size_t j = 0; j < bg_jobs[i].pids.size(); j++) {
+                // 如果为僵尸进程，则删去
+                if (waitpid(bg_jobs[i].pids[j], nullptr, WNOHANG)) {
+                    bg_jobs[i].pids.erase(bg_jobs[i].pids.begin() + j);
+                    j--;
+                }
+            }
+            if (bg_jobs[i].pids.size() == 0) {
+                std::cout << "[" << bg_jobs[i].id << "]"
+                          << " Done    " << bg_jobs[i].cmd << std::endl;
+                bg_jobs.erase(bg_jobs.begin() + i);
+                i--;
+            }
+        }
+    }
+    return;
+}
+
+// cd 命令
+void cd(std::vector<std::string> &args, const char *home) {
+    if (args.size() > 2) {
+        std::cout << "cd: invalid argument number" << std::endl;
+        return;
+    }
+    if (args.size() == 1) {
+        args.push_back(std::string(home));
+    } else if (args[1].substr(0, 2) == "~/" || args[1] == "~") {
+        args[1].replace(0, 1, std::string(home));
+    }
+    if (chdir(args[1].c_str()) == -1) {
+        std::cout << "cd failed" << std::endl;
+    }
+    return;
+}
+
+// 执行外部命令
+void exec(std::string &cmd, char *home) {
+    format(cmd);
+
+    redirect(cmd, "<<< ", STDIN_FILENO, HERE_STR);
+    redirect(cmd, "< ", STDIN_FILENO, O_RDONLY);
+    redirect(cmd, ">> ", STDOUT_FILENO, O_APPEND | O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP | S_IWOTH);
+    redirect(cmd, "> ", STDOUT_FILENO, O_TRUNC | O_WRONLY | O_CREAT, S_IRUSR | S_IRGRP | S_IROTH | S_IWUSR | S_IWGRP | S_IWOTH);
+
+    std::vector<std::string> args = split(cmd, " ");
+    extend(args, home);
+    char *arg_ptrs[args.size() + 1];
+    for (std::size_t i = 0; i < args.size(); i++) {
+        arg_ptrs[i] = &args[i][0];
+    }
+    // exec p 系列的 argv 需要以 nullptr 结尾
+    arg_ptrs[args.size()] = nullptr;
+
+    // execvp 会完全更换子进程接下来的代码，所以正常情况下 execvp 之后这里的代码就没意义了
+    // 如果 execvp 之后的代码被运行了，那就是 execvp 出问题了
+    execvp(args[0].c_str(), arg_ptrs);
+
+    // 所以这里直接报错
+    exit(255);
+}
+
+// 重定向
+void redirect(std::string &cmd, const std::string &redir, const int &originfd, const int &flag, const mode_t &mode) {
+    std::size_t pos;
+    std::string filename;
+    int redirfd;
+
+    while ((pos = cmd.find(redir)) != std::string::npos) {
+        int fd;
+        redirfd = originfd;
+
+        redirect_parse(cmd, pos, filename, redirfd, redir.length());
+
+        if (flag < 0) {
+            // 文本重定向
+            filename.append("\n");
+            // 临时文件
+            char temp_file[] = "temp_XXXXXX";
+            if ((fd = mkstemp(temp_file)) == -1) {
+                std::cout << "redirect failed" << std::endl;
+                exit(255);
+            }
+            // 删除文件入口，之后文件用完会自动删除
+            unlink(temp_file);
+            write(fd, &filename[0], filename.size());
+            // 回到临时文件开头，用于之后读入文件内容
+            lseek(fd, 0, SEEK_SET);
+        } else {
+            // 文件重定向
+            if ((fd = open(&filename[0], flag, mode)) == -1) {
+                std::cout << "redirect failed" << std::endl;
+                exit(255);
+            }
+        }
+
+        dup2(fd, redirfd);
+    }
+    return;
+}
+
+// 切分重定向
+void redirect_parse(std::string &cmd, const std::size_t &pos, std::string &filename, int &redirfd, int len) {
+    std::size_t rpos = cmd.find(" ", pos + len);
+    std::size_t lpos = cmd.find_last_of(" ", pos);
+    // 右侧无空格，则已到结尾
+    if (rpos == std::string::npos) {
+        rpos = cmd.length();
+    }
+    filename = &(cmd.substr(pos + len, rpos - pos - len)[0]);
+    // 左侧无空格，则开头就是重定向
+    if (lpos == std::string::npos) {
+        lpos = 0;
+    }
+    // 判断有无数字文件描述符
+    if (lpos < pos - 1) {
+        redirfd = atoi(&(cmd.substr(lpos, pos - lpos)[0]));
+    }
+    cmd.replace(lpos, rpos - lpos, ""); // 保证前面的命令后无单独空格
+    return;
+}
+
+// 信号处理
+void handler(int signum) 
+{
+    std::cout << std::endl;
+    printcwd();
+    std::cout << " # ";
+    std::cout.flush();
+    return;
+}
+
