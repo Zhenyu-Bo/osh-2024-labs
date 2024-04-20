@@ -49,6 +49,10 @@ int main() {
 	while (true) {
         process_bgs(bg_pids);
 
+        // 如果输入EOF（按下Ctr+D）则退出shell程序
+        if(std::cin.eof())
+            exit(0);
+
 	    // 打印提示符
         std::cout << "$ ";
 
