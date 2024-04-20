@@ -31,10 +31,12 @@ void process_bgs(std::vector<pid_t> &bg_pids);
 int main() {
 
     // 信号处理
-    struct sigaction shell, child;// shell进程需要忽略SIGINT,子进程需要处理SIGINT
+    struct sigaction shell, child, ign;// shell进程需要忽略SIGINT,子进程需要处理SIGINT
 
     shell.sa_flags = 0;
     shell.sa_handler = handle_sigint;
+    ign.sa_flags = 0;
+    ign.sa_handler = SIG_IGN;
     
     // 在程序的一开始就忽略Ctr+C，否则此时输入Ctr+C会终止shell程序
     sigaction(SIGINT,&shell,&child);
@@ -248,6 +250,7 @@ int main() {
             }
             setpgid(pid,pid);// 将进程组id设置为子进程id
             tcsetpgrp(0,pid);// 将前台进程组设置为子进程的进程组
+            sigaction(SIGTTOU, &ign, nullptr);
             int status;// 表示子进程是否结束
             // 等待子进程pid结束
             int ret = waitpid(pid, &status, 0);// 这里需要修改为waitpid，以知道子程序是正常结束还是因为接收到信号而结束
