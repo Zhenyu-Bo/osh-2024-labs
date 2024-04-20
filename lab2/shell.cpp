@@ -51,8 +51,11 @@ int main() {
 
         // 如果输入EOF（按下Ctr+D）则退出shell程序
         if(std::cin.eof())
+        {
+            std::cout << "exit\n";// 在Ctr+D退出时显示exit
             exit(0);
-
+        }
+            
 	    // 打印提示符
         std::cout << "$ ";
 
