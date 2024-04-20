@@ -21,13 +21,12 @@
 #include <limits>
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
-std::string trim(std::string &s);
+std::string trim(std::string s);
 void handleRedirection(std::vector<std::string>& args);
 void handle_sigint(int sig);
-void handle_sigchld(int sig);
-void process_bg(std::vector<pid_t> bg_pids);
 void hide_inout();
-void wait(std::vector<pid_t> bg_pids);
+void wait(std::vector<pid_t> &bg_pids);
+void process_bgs(std::vector<pid_t> &bg_pids);
 
 int main() {
 
@@ -36,40 +35,32 @@ int main() {
 
     shell.sa_flags = 0;
     shell.sa_handler = handle_sigint;
-    //ign.sa_flags = 0;
-    //ign.sa_handler = SIG_IGN;
-    //dfl.sa_flags = 0;
-    //dfl.sa_handler = SIG_DFL;
     
     // 在程序的一开始就忽略Ctr+C，否则此时输入Ctr+C会终止shell程序
-    sigaction(SIGINT,&shell,&child);// shell进程忽略SIGINT，并将原处理方式存入child中以便在子进程中恢复
+    sigaction(SIGINT,&shell,&child);
     signal(SIGTTOU, SIG_IGN); // shell进程忽略Ctrl+C
-    
 
 	// 不同步 iostream 和 cstdio 的 buffer
 	std::ios::sync_with_stdio(false);
-	
+
+    std::vector<pid_t> bg_pids; // 用于存储后台进程的pid
 	// 用来存储读入的一行命令
 	std::string cmd;
-
-    //int bg_num = 0;// 后台运行的命令数目
-    std::vector<pid_t> bg_pids;// 后台运行的进程id
-
 	while (true) {
-        // 检查并等待所有后台进程
-        process_bg(bg_pids);
+        process_bgs(bg_pids);
 
-        //signal(SIGCHLD, handle_sigchld); // 处理SIGCHLD信号，等待所有子进程结束,，避免出现僵尸进程
 	    // 打印提示符
         std::cout << "$ ";
 
         // 读入一行。std::getline 结果不包含换行符。
         std::getline(std::cin, cmd);
+
         bool is_background = false;
         if (!cmd.empty() && cmd.back() == '&') {
-            cmd.pop_back();  // 删除 "&"
+            // 将命令作为后台进程运行
             is_background = true;
-            //bg_num++;
+            // 移除'&'
+            cmd.pop_back();
         }
 
         // 按空格分割命令为单词
@@ -78,70 +69,65 @@ int main() {
         std::vector<std::string> cmds = split(trim(cmd)," | ");
         int fd[cmds.size()-1][2]; // 用于pipe函数
 
+
         // 没有可处理的命令
         if (args.empty()) {
-		    continue;
+	    	continue;
         }
 
         // 退出
         if (args[0] == "exit") {
-		    if (args.size() <= 1) {
-			    return 0;
-      	    }
+	    	if (args.size() <= 1) {
+	    		return 0;
+          	}
 
-    	    // std::string 转 int
-    	    std::stringstream code_stream(args[1]);
-    	    int code = 0;
-    	    code_stream >> code;
+        	// std::string 转 int
+        	std::stringstream code_stream(args[1]);
+        	int code = 0;
+        	code_stream >> code;
 
-    	    // 转换失败
-    	    if (!code_stream.eof() || code_stream.fail()) {
-		    std::cout << "Invalid exit code\n";
-            continue;
-    	    }
+        	// 转换失败
+        	if (!code_stream.eof() || code_stream.fail()) {
+	    	    std::cout << "Invalid exit code\n";
+                continue;
+        	}
 
-    	    return code;
+        	return code;
         }
 
         if (args[0] == "pwd") {
-    	    //std::cout << "To be done!\n";
-            if(args.size() > 1) {
-                std::cout << "Too many arguments!\n";
-                continue;
-            }
-    	    char cwd[PATH_MAX]; // 存储当前工作目录
-    	    if (getcwd(cwd, sizeof(cwd)) != nullptr) {
-    		    std::cout << cwd << std::endl;// 输出当前工作目录
-    	    } 
-            else {
-    		    std::cout << "getcwd failed\n";// 输出错误信息
-    	    }
-    	    continue;
+        	//std::cout << "To be done!\n";
+        	char cwd[PATH_MAX]; // 存储当前工作目录
+        	if (getcwd(cwd, sizeof(cwd)) != nullptr) {
+        		std::cout << cwd << std::endl;// 输出当前工作目录
+        	} else {
+        		std::cout << "getcwd failed\n";// 输出错误信息
+        	}
+        	continue;
         }
 
         if (args[0] == "cd") {
     	    //std::cout << "To be done!\n";
     	    if (args.size() <= 1 || args[1].find_first_not_of(' ') == std::string::npos) {
-    		    // cd 没有参数时，切换到家目录
-        	    chdir("/home");
+    	    	// cd 没有参数时，切换到家目录
+            	chdir("/home");
     	    }
     	    else if(args.size() > 2)
     	    {
-        	    // cd 有多个参数时报错
-        	    std::cout << "Too many arguments!\n" << std::endl;
+            	// cd 有多个参数时报错
+            	std::cout << "Too many arguments!\n" << std::endl;
     	    }
     	    else {
-        	    // cd 有参数时，切换到参数指定的目录，参数为 args[1]
-        	    // chdir(args[1].c_str());
-        	    // 若切换失败，输出错误信息
-        	    if (chdir(args[1].c_str()) != 0) {
-        		    std::cout << "cd failed\n";
-        	    }
+            	// cd 有参数时，切换到参数指定的目录，参数为 args[1]
+            	// chdir(args[1].c_str());
+            	// 若切换失败，输出错误信息
+            	if (chdir(args[1].c_str()) != 0) {
+            		std::cout << "cd failed\n";
+            	}
     	    }
     	    continue;
         }
 
-        // wait 命令
         if (args[0] == "wait") {
             if(args.size() > 1) {
                 std::cout << "Too many arguments!\n";
@@ -153,31 +139,29 @@ int main() {
 
         // 处理外部命令
         pid_t pid = fork();
-        //pid_t head_pid;
-        if (pid == 0) {
+
+        if (pid < 0)
+        {
+            std::cout << "fork failed\n";
+            continue;
+        }
+        else if (pid == 0) {
             // 这里只有子进程才会进入
 
             // 子进程不能忽略SIG_IGN，故需要恢复默认行为
             sigaction(SIGINT,&child,nullptr);
             signal(SIGTTOU,SIG_DFL);
 
-            if(is_background)
+            if (is_background)
             {
-                signal(SIGPIPE,SIG_IGN);// 忽略SIGPIPE信号
-                setsid(); // 创建新的会话，并将子进程设置为会话的领头进程
-                // 后台运行时需要屏蔽输入输出
                 hide_inout();
             }
-            
+
             if(cmds.size() > 1)
             {
                 for(size_t i = 0;i < cmds.size()-1;i++)
                 {
-                    if (pipe(fd[i]) == -1)// 建立管道
-                    {
-                        std::cout << "fork error!\n";
-                        exit(255);
-                    }
+                    pipe(fd[i]);// 建立管道
                 }
             }
 
@@ -187,16 +171,10 @@ int main() {
                 args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
                 pid_t pid_1 = fork();
 
-                if(pid_1 < 0)
-                {
-                    std::cout << "fork error!\n";
-                    exit(255);
-                }
-                else if(pid_1 == 0)
+                if(pid_1 == 0)
                 {
                     // 处理外部命令
 
-                    //head_pid = getpid();
                     //handleRedirection(args);
                     if(cmds.size() > 1)
                     {
@@ -219,18 +197,6 @@ int main() {
                     }
                     handleRedirection(args);
 
-                    //setpgid(getpid(),head_pid);
-                    if (is_background) {
-                        // 后台进程忽略SIGINT和SIGTTOU信号
-                        signal(SIGINT, SIG_IGN);
-                        signal(SIGTTOU, SIG_IGN);
-                        if (tcsetpgrp(0, getppid()) < 0) 
-                        {
-                            std::cout << "tcsetpgrp failed\n";
-                            exit(255);
-                        }
-                    }
-
                     // std::vector<std::string> 转 char **
                     int j = 0;
                     char *arg_ptrs[args.size() + 1];
@@ -249,7 +215,7 @@ int main() {
                     // 所以这里直接报错
                     exit(255);
                 }
-                else // pid_1 > 0
+                else
                 {
                     if(i != 0)
                     {
@@ -257,67 +223,41 @@ int main() {
                         close(fd[i-1][0]); // 关闭读端
                         close(fd[i-1][1]); // 关闭写端
                     }
-                    /*if(is_background)
-                    {
-                        bg_pids.push_back(pid_1);
-                    }*/
                 }
             }
             if(cmds.size() > 1)
             {
                 close(fd[cmds.size()-2][1]); // 关闭最后一个管道的写端
             }
-            if (is_background) {
-                // 后台运行不需要等待子进程结束
-                setpgid(pid,pid);
-                bg_pids.push_back(pid);
-                return 0;
-            }
             while(wait(NULL) > 0); // 等待所有子进程结束
             return 0; // 结束父进程
         }	
-        else if(pid > 0)
-        {
-            // 父进程
-            if (is_background) {
-                // 后台运行不需要等待子进程结束
-                tcsetpgrp(0, getpgrp());
-                std::cout << "Process " << pid << " is running in background\n";
-                //bg_pids.push_back(pid);
-                //bg_num++;
+        else {
+            // 这里只有父进程（原进程）才会进入
+            if(is_background)
+            {
+                bg_pids.push_back(pid);
                 continue;
             }
-            else if (tcsetpgrp(0, pid) < 0) {
-                // 将前台进程组设置为子进程的进程组
-                std::cout << "tcsetpgrp failed\n";
-                continue;
-            }
-            int status;
-            int ret = waitpid(pid, &status, 0);
-            tcsetpgrp(0, getpgrp()); // 将前台进程组设置为shell进程的进程组
+            setpgid(pid,pid);// 将进程组id设置为子进程id
+            tcsetpgrp(0,pid);// 将前台进程组设置为子进程的进程组
+            int status;// 表示子进程是否结束
+            // 等待子进程pid结束
+            int ret = waitpid(pid, &status, 0);// 这里需要修改为waitpid，以知道子程序是正常结束还是因为接收到信号而结束
+            tcsetpgrp(0,getpgrp()); // 将前台进程组设置为shell进程的进程组
+            //int ret = wait(&over);
             if (ret < 0) {
                 std::cout << "wait failed";
             }
             else if(WIFSIGNALED(status)) {
-                std::cout << "\n";
+                // 子程序因接收到信号而结束时，需要输出换行符（正常结束时不需要做任何处理）
+                std::cout << std::endl;
             }
-        }
-        else {
-            std::cout << "fork failed\n";
         }
 
         /*// 这里只有父进程（原进程）才会进入
         setpgid(pid,pid);// 将进程组id设置为子进程id
-        if (is_background) {
-            // 后台运行
-            std::cout << "Process " << pid << " is running in background\n";
-            bg_pids.push_back(pid);
-            continue;
-        } 
-        else if (tcsetpgrp(0, pid) < 0) {// 将前台进程组设置为子进程的进程组
-            std::cout << "tcsetpgrp failed\n";
-            continue;
-        }   
+        tcsetpgrp(0,pid);// 将前台进程组设置为子进程的进程组
         int over;// 表示子进程是否结束
         // 等待子进程pid结束
         int ret = waitpid(pid, &over, 0);// 这里需要修改为waitpid，以知道子程序是正常结束还是因为接收到信号而结束
@@ -328,7 +268,7 @@ int main() {
         }
         else if(WIFSIGNALED(over)) {
             // 子程序因接收到信号而结束时，需要输出换行符（正常结束时不需要做任何处理）
-            std::cout << "\n";
+            std::cout << std::endl;
         }*/
     }
 }
@@ -348,14 +288,15 @@ std::vector<std::string> split(std::string s, const std::string &delimiter) {
   	return res;
 }
 
-std::string trim(std::string &s)
+std::string trim(std::string s)
 {
+  	if (s.empty())
+    	return "";
   	size_t first = s.find_first_not_of(' ');
   	if (first == std::string::npos)
-    	s = "";
+    	return "";
   	size_t last = s.find_last_not_of(' ');
-  	s = s.substr(first, (last - first + 1));
-    return s;
+  	return s.substr(first, (last - first + 1));
 }
 
 void handleRedirection(std::vector<std::string>& args) {
@@ -495,75 +436,46 @@ void handle_sigint(int sig)
     std::cout.flush();
 }
 
-void handle_sigchld(int sig) {
-    while (waitpid(-1, NULL, WNOHANG) > 0);
+void hide_inout()
+{
+    int null_fd = open("/dev/null", O_RDWR);
+    if(null_fd < 0)
+    {
+        std::cout << "open /dev/null failed\n";
+        return;
+    }
+    dup2(null_fd, 0);
+    dup2(null_fd, 1);
+    dup2(null_fd, 2);
+    close(null_fd);
 }
 
-void process_bg(std::vector<pid_t> bg_pids)
+void wait(std::vector<pid_t> &bg_pids)
 {
-    for (auto it = bg_pids.begin(); it != bg_pids.end(); ) {
+    for(size_t i = 0; i < bg_pids.size(); i++)
+    {
         int status;
-        int ret = waitpid(*it, &status, WNOHANG);  // 使用WNOHANG选项
-        if (ret == 0) {
-            // 没有子进程结束，跳过当前的循环
-            ++it;
-        } else if (ret < 0) {
-            perror("waitpid");
-            it = bg_pids.erase(it);
-        } else {
-            if(WIFSIGNALED(status)) {
-                std::cout << "\n";
-            }
-            std::cout << "Process [" << *it << "] done!\n";
-            it = bg_pids.erase(it);
+        waitpid(bg_pids[i], &status, 0);
+        if(WIFEXITED(status))
+        {
+            std::cout << "Process " << bg_pids[i] << " exited with status " << WEXITSTATUS(status) << std::endl;
+        }
+        else if(WIFSIGNALED(status))
+        {
+            std::cout << "Process " << bg_pids[i] << " terminated by signal " << WTERMSIG(status) << std::endl;
         }
     }
 }
 
-void hide_inout()
+// 处理后台进程，删除bg_pids中已经结束的命令，防止出现僵尸进程
+void process_bgs(std::vector<pid_t> &bg_pids)
 {
-    int nullfd = open("/dev/null", O_RDWR);
-    if (nullfd < 0) {
-        perror("open");
-        exit(EXIT_FAILURE);
-    }
-
-    // 重定向标准输入
-    if (dup2(nullfd, STDIN_FILENO) < 0) {
-        perror("dup2");
-        exit(EXIT_FAILURE);
-    }
-
-    // 重定向标准输出
-    if (dup2(nullfd, STDOUT_FILENO) < 0) {
-        perror("dup2");
-        exit(EXIT_FAILURE);
-    }
-
-    // 重定向标准错误输出
-    if (dup2(nullfd, STDERR_FILENO) < 0) {
-        perror("dup2");
-        exit(EXIT_FAILURE);
-    }
-
-    // 关闭文件描述符
-    close(nullfd);
-}
-
-void wait(std::vector<pid_t> bg_pids)
-{
-    for (auto it = bg_pids.begin(); it != bg_pids.end(); ) {
+    for(int i = bg_pids.size() - 1; i >= 0; i--)
+    {
         int status;
-        int ret = waitpid(*it, &status, 0);
-        if (ret < 0) {
-            perror("waitpid");
-            it = bg_pids.erase(it);
-        } else {
-            if(WIFSIGNALED(status)) {
-                std::cout << "\n";
-            }
-            std::cout << "Process [" << *it << "] done!\n";
-            it = bg_pids.erase(it);
+        if(waitpid(bg_pids[i], &status, WNOHANG) > 0)
+        {
+            bg_pids.erase(bg_pids.begin() + i);
         }
     }
 }
