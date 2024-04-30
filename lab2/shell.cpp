@@ -14,11 +14,14 @@
 #include <sys/wait.h>
 
 #include <sys/fcntl.h>
+
 #include <unistd.h>
 // 信号处理
 #include <signal.h>
 
 #include <limits>
+
+#include <cstdlib>
 
 std::vector<std::string> split(std::string s, const std::string &delimiter);
 std::string trim(std::string s);
@@ -27,6 +30,7 @@ void handle_sigint(int sig);
 void hide_inout();
 void wait(std::vector<pid_t> &bg_pids);
 void process_bgs(std::vector<pid_t> &bg_pids);
+void process_args(std::vector<std::string> &args);
 
 int main() {
 
@@ -77,7 +81,7 @@ int main() {
         // 按" | "分割命令为单词
         std::vector<std::string> cmds = split(trim(cmd)," | ");
         int fd[cmds.size()-1][2]; // 用于pipe函数
-
+        process_args(args);
 
         // 没有可处理的命令
         if (args.empty()) {
@@ -178,6 +182,7 @@ int main() {
             {
             
                 args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
+                process_args(args);
                 pid_t pid_1 = fork();
 
                 if(pid_1 == 0)
@@ -438,8 +443,6 @@ void handleRedirection(std::vector<std::string>& args) {
 
 void handle_sigint(int sig)
 {
-    // 清空输入流中的残留数据并重置输入流状态
-    std::cin.ignore(std::cin.rdbuf()->in_avail());
     // 开始下一行
     std::cout << "\n$ ";
     // 清空输出缓冲区
@@ -486,6 +489,25 @@ void process_bgs(std::vector<pid_t> &bg_pids)
         if(waitpid(bg_pids[i], &status, WNOHANG) > 0)
         {
             bg_pids.erase(bg_pids.begin() + i);
+        }
+    }
+}
+
+void process_args(std::vector<std::string> &args)
+{
+    for(size_t i = 0; i < args.size(); i++)
+    {
+        if(args[i] == "~" || args[i] == "~/")
+        {
+            const char* home = std::getenv("HOME");
+            if (home != nullptr) 
+            {
+                args[i] = home;
+            }
+            else 
+            {
+                std::cout << "HOME not found\n";
+            }
         }
     }
 }
