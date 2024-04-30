@@ -50,3 +50,9 @@
 
    ![~](./figs/~.png)
 
+3. 实现了对`$SHELL`的转换，会将其转换为当前用户默认的shell程序的路径，下面是一个示例：
+
+   ![echo_shell](./figs/echo_shell.png)
+
+   
+
