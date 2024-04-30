@@ -56,8 +56,7 @@ int main() {
         process_bgs(bg_pids);
 
         // 如果输入EOF（按下Ctr+D）则退出shell程序
-        if(std::cin.eof())
-        {
+        if(std::cin.eof()) {
             std::cout << "exit\n";// 在Ctr+D退出时显示exit
             exit(0);
         }
@@ -153,8 +152,7 @@ int main() {
         // 处理外部命令
         pid_t pid = fork();
 
-        if (pid < 0)
-        {
+        if (pid < 0) {
             std::cout << "fork failed\n";
             continue;
         }
@@ -165,42 +163,34 @@ int main() {
             sigaction(SIGINT,&child,nullptr);
             signal(SIGTTOU,SIG_DFL);
 
-            if (is_background)
-            {
+            if (is_background) {
                 hide_inout();
             }
 
-            if(cmds.size() > 1)
-            {
-                for(size_t i = 0;i < cmds.size()-1;i++)
-                {
+            if(cmds.size() > 1) {
+                for(size_t i = 0;i < cmds.size()-1;i++) {
                     pipe(fd[i]);// 建立管道
                 }
             }
 
-            for(size_t i = 0;i < cmds.size();i++)
-            {
+            for(size_t i = 0;i < cmds.size();i++) {
             
                 args = split(cmds[i]," "); // 注意此时args由cmds[i]得到而不是cmd
                 process_args(args);
                 pid_t pid_1 = fork();
 
-                if(pid_1 == 0)
-                {
+                if(pid_1 == 0) {
                     // 处理外部命令
 
                     //handleRedirection(args);
-                    if(cmds.size() > 1)
-                    {
-                        if(i != 0)
-                        { 
+                    if(cmds.size() > 1) {
+                        if(i != 0) { 
                             // 若不是第一个命令，则需要从上一个命令的管道读取数据
                             dup2(fd[i-1][0], 0); // 将当前进程的标准输入重定向到上一个命令的管道读端
                             close(fd[i-1][0]); // 关闭上一个命令的读端
                             close(fd[i-1][1]); // 关闭上一个命令的写端
                         }
-                        if(i != cmds.size()-1)
-                        {
+                        if(i != cmds.size()-1) {
                             // 若不是最后一个命令，则需要将输出重定向到下一个命令的管道写端
                             // 这里的写端是在描述数据流的方向。当前进程将数据写入 fd[i][1]
                             // 虽然 fd[i][1] 是由当前进程创建和写入的，但从数据流的角度来看，它可以被视为下一个命令的写端
@@ -229,18 +219,15 @@ int main() {
                     // 所以这里直接报错
                     exit(255);
                 }
-                else
-                {
-                    if(i != 0)
-                    {
+                else {
+                    if(i != 0) {
                         // 关闭上一个命令的读端和写端，防止阻塞
                         close(fd[i-1][0]); // 关闭读端
                         close(fd[i-1][1]); // 关闭写端
                     }
                 }
             }
-            if(cmds.size() > 1)
-            {
+            if(cmds.size() > 1) {
                 close(fd[cmds.size()-2][1]); // 关闭最后一个管道的写端
             }
             while(wait(NULL) > 0); // 等待所有子进程结束
@@ -248,8 +235,7 @@ int main() {
         }	
         else {
             // 这里只有父进程（原进程）才会进入
-            if(is_background)
-            {
+            if(is_background) {
                 bg_pids.push_back(pid);
                 continue;
             }
@@ -315,77 +301,65 @@ std::string trim(std::string s)
 }
 
 void handleRedirection(std::vector<std::string>& args) {
-    for (size_t i = 0; i < args.size(); i++) 
-    {
-        if (args[i] == ">>") 
-        {
+    for (size_t i = 0; i < args.size(); i++) {
+        if (args[i] == ">>") {
             //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(), O_CREAT | O_APPEND | O_WRONLY, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
-            else
-            {
+            else {
                 dup2(fd, 1);
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
             args[i+1] = " ";
         } 
-        if (args[i] == ">") 
-        {
+        if (args[i] == ">") {
             //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
-            else
-            {
+            else {
                 dup2(fd, 1);
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
             args[i+1] = " ";
         } 
-        if (args[i].find(">") != std::string::npos && args[i] != ">")
-        {
+        if (args[i].find(">") != std::string::npos && args[i] != ">") {
             // 处理数字文件重定向
             int fd_num = std::stoi(args[i].substr(0, args[i].find(">")));
             int fd = open(args[i+1].c_str(), O_CREAT | O_WRONLY | O_TRUNC, 0777);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
-            else
-            {
+            else {
                 dup2(fd, fd_num);
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
             args[i+1] = " ";
         }
-        if (args[i] == "<") 
-        {
+        if (args[i] == "<") {
             //std::cout << args[i] << " " << args[i+1] << std::endl;
             int fd = open(args[i+1].c_str(),  O_RDONLY);
             if(fd < 0)  
                 std::cout << "Redirection Error\n";
-            else
-            {
+            else {
                 dup2(fd, 0);
                 close(fd);
             }
             args[i] = " "; // 防止重定向文件名被当作参数
             args[i+1] = " ";
         }
-        if(args[i] == "<<<")
-        {
+        if(args[i] == "<<<") {
             // 文本重定向
             //std::cout << args[i] << " " << args[i+1] << std::endl;
             char tmpfile[] = "/tmp/fileXXXXXX";// 创建临时文件
             int fd = mkstemp(tmpfile);// 返回临时文件的文件描述符
-            if(fd < 0)
-            {
+            if(fd < 0) {
                 std::cout << "Redirection Error\n";
             }
-            else
-            {
+            else {
                 std::string text = args[i+1] + "\n";
                 write(fd, text.c_str(), text.size());
                 lseek(fd, 0, SEEK_SET); // 重置文件指针到文件开始
@@ -395,27 +369,21 @@ void handleRedirection(std::vector<std::string>& args) {
             args[i] = " "; // 防止重定向文本被当作参数
             args[i+1] = " ";
         }
-        if(args[i] == "<<")
-        {
+        if(args[i] == "<<") {
             // EOF重定向
-            if(args[i+1] != "EOF")
-            {
+            if(args[i+1] != "EOF") {
                 std::cout << "EOF redirection Error\n";
                 continue;
             }
             char tmpfile[] = "/tmp/fileXXXXXX";
             int fd = mkstemp(tmpfile);
-            if(fd < 0)
-            {
+            if(fd < 0) {
                 std::cout << "Redirection Error\n";
             }
-            else
-            {
+            else {
                 std::string text;
-                for(size_t j = i+2; j < args.size(); j++)
-                {
-                    if(args[j] == "EOF")
-                    {
+                for(size_t j = i+2; j < args.size(); j++) {
+                    if(args[j] == "EOF") {
                         break;
                     }
                     text += args[j];
@@ -428,10 +396,8 @@ void handleRedirection(std::vector<std::string>& args) {
             args[i] = " "; // 防止重定向文本被当作参数
             args[i+1] = " ";
             // 清除下一个EOF之前的所有参数
-            for(size_t j = i+2; j < args.size(); j++)
-            {
-                if(args[j] == "EOF")
-                {
+            for(size_t j = i+2; j < args.size(); j++) {
+                if(args[j] == "EOF") {
                     args[j] = " ";
                     break;
                 }
@@ -452,8 +418,7 @@ void handle_sigint(int sig)
 void hide_inout()
 {
     int null_fd = open("/dev/null", O_RDWR);
-    if(null_fd < 0)
-    {
+    if(null_fd < 0) {
         std::cout << "open /dev/null failed\n";
         return;
     }
@@ -465,16 +430,13 @@ void hide_inout()
 
 void wait(std::vector<pid_t> &bg_pids)
 {
-    for(size_t i = 0; i < bg_pids.size(); i++)
-    {
+    for(size_t i = 0; i < bg_pids.size(); i++) {
         int status;
         waitpid(bg_pids[i], &status, 0);
-        if(WIFEXITED(status))
-        {
+        if(WIFEXITED(status)) {
             std::cout << "Process " << bg_pids[i] << " exited with status " << WEXITSTATUS(status) << std::endl;
         }
-        else if(WIFSIGNALED(status))
-        {
+        else if(WIFSIGNALED(status)) {
             std::cout << "Process " << bg_pids[i] << " terminated by signal " << WTERMSIG(status) << std::endl;
         }
     }
@@ -483,11 +445,9 @@ void wait(std::vector<pid_t> &bg_pids)
 // 处理后台进程，删除bg_pids中已经结束的命令，防止出现僵尸进程
 void process_bgs(std::vector<pid_t> &bg_pids)
 {
-    for(int i = bg_pids.size() - 1; i >= 0; i--)
-    {
+    for(int i = bg_pids.size() - 1; i >= 0; i--) {
         int status;
-        if(waitpid(bg_pids[i], &status, WNOHANG) > 0)
-        {
+        if(waitpid(bg_pids[i], &status, WNOHANG) > 0) {
             bg_pids.erase(bg_pids.begin() + i);
         }
     }
@@ -495,18 +455,23 @@ void process_bgs(std::vector<pid_t> &bg_pids)
 
 void process_args(std::vector<std::string> &args)
 {
-    for(size_t i = 0; i < args.size(); i++)
-    {
-        if(args[i] == "~" || args[i] == "~/")
-        {
+    for(size_t i = 0; i < args.size(); i++) {
+        if(args[i] == "~" || args[i] == "~/") {
             const char* home = std::getenv("HOME");
-            if (home != nullptr) 
-            {
+            if (home != nullptr)  {
                 args[i] = home;
             }
-            else 
-            {
+            else {
                 std::cout << "HOME not found\n";
+            }
+        }
+        if(args[i] == "$SHELL") {
+            const char* shell = std::getenv("SHELL");
+            if (shell != nullptr) {
+                args[i] = shell;
+            }
+            else {
+                std::cout << "SHELL not found\n";
             }
         }
     }
