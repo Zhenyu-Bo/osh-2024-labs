@@ -52,7 +52,9 @@ void parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len
 }
 
 void handle_clnt(int clnt_sock)
-{
+{   
+    // 处理任务时先休眠5秒，同时处理两个任务，观察两个任务是否能够同时响应来判断是否成功实现连接请求的多线程并发处理
+    //sleep(5); 
     // 一个粗糙的读取方法，可能有 BUG！
     // 读取客户端发送来的数据，并解析
     char* req_buf = (char*) malloc(MAX_RECV_LEN * sizeof(char));
@@ -174,10 +176,16 @@ int main(){
         // 处理客户端的请求
         //handle_clnt(clnt_sock);
         pthread_mutex_lock(&pool.mutex_queue);
-        pool.queue[pool.tail] = clnt_sock;
-        pool.tail = (pool.tail + 1) % MAX_CONN;
-        pthread_mutex_unlock(&pool.mutex_queue);
-        sem_post(&pool.sem_queue);
+
+        if((pool.tail + 1) % MAX_CONN == pool.head) {
+            // 队列已满时拒绝新的连接
+            close(clnt_sock);
+        } else {
+            pool.queue[pool.tail] = clnt_sock;
+            pool.tail = (pool.tail + 1) % MAX_CONN;
+            pthread_mutex_unlock(&pool.mutex_queue);
+            sem_post(&pool.sem_queue);
+        }   
     }
 
     // 实际上这里的代码不可到达，可以在 while 循环中收到 SIGINT 信号时主动 break
