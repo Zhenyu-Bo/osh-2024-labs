@@ -9,6 +9,7 @@
 #include <netinet/in.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <signal.h>
 
 #define BIND_IP_ADDR "127.0.0.1"
 #define BIND_PORT 8000
@@ -32,6 +33,7 @@ typedef struct thread_pool {
 } thread_pool_t;
 
 thread_pool_t pool;
+int serv_sock;
 
 void parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len)
 {
@@ -102,12 +104,38 @@ void *thread_func(void* arg)
     return NULL;
 }
 
+void handle_signal(int sig)
+{
+    if(sig == SIGINT)
+    {
+        for(int i = 0;i < THREAD_POOL_SIZE;i++)
+        {
+            pthread_cancel(pool.threads[i]);
+            pthread_join(pool.threads[i],NULL);
+        }
+
+        // 销毁信号量和互斥锁
+        sem_destroy(&pool.sem_queue);
+        pthread_mutex_destroy(&pool.mutex_queue);
+
+        // 关闭套接字
+        close(serv_sock);
+        // 打印换行符，使得输出更加美观
+        printf("\n");
+        //结束程序
+        exit(0);
+    }
+}
+
 int main(){
+    // 注册信号处理函数
+    signal(SIGINT, handle_signal);
     // 创建套接字，参数说明：
     //   AF_INET: 使用 IPv4
     //   SOCK_STREAM: 面向连接的数据传输方式
     //   IPPROTO_TCP: 使用 TCP 协议
-    int serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    //int serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
     // 将套接字和指定的 IP、端口绑定
     //   用 0 填充 serv_addr（它是一个 sockaddr_in 结构体）
@@ -154,6 +182,6 @@ int main(){
 
     // 实际上这里的代码不可到达，可以在 while 循环中收到 SIGINT 信号时主动 break
     // 关闭套接字
-    close(serv_sock);
-    return 0;
+    //close(serv_sock);
+    //return 0;
 }
