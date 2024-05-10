@@ -7,6 +7,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #define BIND_IP_ADDR "127.0.0.1"
 #define BIND_PORT 8000
@@ -15,8 +17,21 @@
 #define MAX_PATH_LEN 1024
 #define MAX_HOST_LEN 1024
 #define MAX_CONN 20
+#define THREAD_POOL_SIZE 20
 
 #define HTTP_STATUS_200 "200 OK"
+
+// 线程池结构体
+typedef struct thread_pool {
+    pthread_t threads[THREAD_POOL_SIZE]; // 线程数组
+    int queue[MAX_CONN]; // 任务队列
+    int head; // 任务队列的头部
+    int tail; // 任务队列的尾部
+    sem_t sem_queue; // 任务队列的信号量
+    pthread_mutex_t mutex_queue; // 互斥锁，用于保护任务队列的并发访问
+} thread_pool_t;
+
+thread_pool_t pool;
 
 void parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len)
 {
@@ -70,6 +85,23 @@ void handle_clnt(int clnt_sock)
     free(response);
 }
 
+void *thread_func(void* arg)
+{
+    while (1)
+    {
+        // 等待信号量
+        sem_wait(&pool.sem_queue);
+        // 从任务队列中取出一个任务
+        pthread_mutex_lock(&pool.mutex_queue);
+        int clnt_sock = pool.queue[pool.head];
+        pool.head = (pool.head + 1) % MAX_CONN;
+        pthread_mutex_unlock(&pool.mutex_queue);
+        // 处理任务
+        handle_clnt(clnt_sock);
+    }
+    return NULL;
+}
+
 int main(){
     // 创建套接字，参数说明：
     //   AF_INET: 使用 IPv4
@@ -97,12 +129,27 @@ int main(){
     struct sockaddr_in clnt_addr;
     socklen_t clnt_addr_size = sizeof(clnt_addr);
 
+    // 初始化线程池
+    sem_init(&pool.sem_queue, 0, 0);
+    pthread_mutex_init(&pool.mutex_queue, NULL);
+    pool.head = 0;
+    pool.tail = 0;
+    for(int i = 0;i < THREAD_POOL_SIZE;i++)
+    {
+        pthread_create(&pool.threads[i], NULL, thread_func, NULL);
+    }
+
     while (1) // 一直循环
     {
         // 当没有客户端连接时，accept() 会阻塞程序执行，直到有客户端连接进来
         int clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr, &clnt_addr_size);
         // 处理客户端的请求
-        handle_clnt(clnt_sock);
+        //handle_clnt(clnt_sock);
+        pthread_mutex_lock(&pool.mutex_queue);
+        pool.queue[pool.tail] = clnt_sock;
+        pool.tail = (pool.tail + 1) % MAX_CONN;
+        pthread_mutex_unlock(&pool.mutex_queue);
+        sem_post(&pool.sem_queue);
     }
 
     // 实际上这里的代码不可到达，可以在 while 循环中收到 SIGINT 信号时主动 break
