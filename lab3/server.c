@@ -11,6 +11,7 @@
 #include <semaphore.h>
 #include <signal.h>
 #include <ctype.h>
+#include <sys/stat.h>
 
 #define BIND_IP_ADDR "127.0.0.1"
 #define BIND_PORT 8000
@@ -22,6 +23,8 @@
 #define THREAD_POOL_SIZE 20
 
 #define HTTP_STATUS_200 "200 OK"
+#define HTTP_STATUS_404 "404 Not Found"
+#define HTTP_STATUS_500 "500 Internal Server Error"
 
 // 线程池结构体
 typedef struct thread_pool {
@@ -81,11 +84,69 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
     if(strcmp(method,"GET") != 0 || url[0] != '/' || ver_len < 2) {
         return -1;
     }
-    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n') || strncmp(version,"HTTP/",5) != 0) {
+    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n') || strncmp(version,"HTTP/1.0",8) != 0) {
         return -1;
     }
     memcpy(path,url,url_len+1);
     *path_len = url_len;
+    return 0;
+}
+
+int get_content(char *path, long *file_size, char **content)
+{
+    char cur_dir[1024];
+    if(getcwd(cur_dir,sizeof(cur_dir)) == NULL) {
+        perror("getcwd error!\n");
+        return -1;
+    }
+    char *file_path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
+    if(file_path == NULL) {
+        //perror("malloc error!\n");
+        return -1;
+    }
+
+    if(strlen(cur_dir) + strlen(path) + 2 > 2*MAX_PATH_LEN) {
+        return -1;
+    }
+    snprintf(file_path, 2*MAX_PATH_LEN, "%s%s", cur_dir, path);
+
+    struct stat path_stat;
+    if(stat(file_path, &path_stat) == -1 || S_ISDIR(path_stat.st_mode)) {
+        //perror("stat error!\n");
+        return -1;
+    }
+    if(access(file_path, F_OK) == -1) {
+        // 请求资源不存在时，返回-2
+        //perror("access error!\n");
+        return -2;
+    }
+    
+    FILE *file = fopen(file_path, "r");
+    if (file == NULL) {
+        //printf("file_path: %s\n", file_path);
+        perror("fopen error!\n");
+        return -2;
+    }
+
+    fseek(file, 0, SEEK_END);
+    *file_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    *content = (char*) malloc((*file_size + 1) * sizeof(char));
+    if(*content == NULL) {
+        perror("malloc error!\n");
+        fclose(file);
+        return -1;
+    }
+
+    fread(*content, 1, *file_size, file);
+    (*content)[*file_size] = '\0';
+    //printf("%s",content);
+
+    fclose(file);
+
+    free(file_path);
+
     return 0;
 }
 
@@ -105,41 +166,30 @@ void handle_clnt(int clnt_sock)
     char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
     ssize_t path_len;
     int ret = parse_request(req_buf, req_len, path, &path_len, version);
-
+    long file_size;
+    char* content = NULL;
+    int ret_2 = get_content(path, &file_size, &content);
     // 构造要返回的数据
-    // 这里没有去读取文件内容，而是以返回请求资源路径作为示例，并且永远返回 200
     // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
     char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
     size_t response_len;
-    //ssize_t ver_len = strlen(version);
-    if(ret == 0) {
-        if(strncmp(version,"HTTP/1.0",8) == 0) {
-            sprintf(response,
-                "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
-                HTTP_STATUS_200, path_len, path);
-        }
-        else if(strncmp(version,"HTTP/1.1",8) == 0) {
-            sprintf(response,
-                "HTTP/1.1 %s\r\nContent-Length: %zd\r\n\r\n%s",
-                HTTP_STATUS_200, path_len, path);
-        }
-        else if(strncmp(version,"HTTP/2.0",8) == 0) {
-            sprintf(response,
-                "HTTP/2.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
-                HTTP_STATUS_200, path_len, path);
-        }
-        else {
-            sprintf(response,
-            "500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
-        }
-        response_len = strlen(response);
-    }
-    else if(ret == -1) {
+    
+    if(ret == -1 || ret_2 == -1) {
         sprintf(response,
-            "500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
-        response_len = strlen(response);
+            "HTTP1.0 %s \r\nContent-Length: 0\r\n\r\n",
+            HTTP_STATUS_500);
     }
-
+    else if(ret_2 == -2) {
+        sprintf(response,
+            "HTTP1.0 %s \r\nContent-Length: 0\r\n\r\n",
+            HTTP_STATUS_404);
+    }
+    else if(ret == 0 && ret_2 == 0) {
+        sprintf(response,
+            "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
+            HTTP_STATUS_200, file_size, content);
+    }
+    response_len = strlen(response);
     // 通过 clnt_sock 向客户端发送信息
     // 将 clnt_sock 作为文件描述符写内容
     write(clnt_sock, response, response_len);
@@ -151,6 +201,8 @@ void handle_clnt(int clnt_sock)
     free(req_buf);
     free(path);
     free(response);
+    free(version);
+    free(content);
 }
 
 void *thread_func(void* arg)
