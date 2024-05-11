@@ -176,12 +176,12 @@ void handle_clnt(int clnt_sock)
     
     if(ret == -1 || ret_2 == -1) {
         sprintf(response,
-            "HTTP1.0 %s \r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.0 %s \r\nContent-Length: 0\r\n\r\n",
             HTTP_STATUS_500);
     }
     else if(ret_2 == -2) {
         sprintf(response,
-            "HTTP1.0 %s \r\nContent-Length: 0\r\n\r\n",
+            "HTTP/1.0 %s \r\nContent-Length: 0\r\n\r\n",
             HTTP_STATUS_404);
     }
     else if(ret == 0 && ret_2 == 0) {
