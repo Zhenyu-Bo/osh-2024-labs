@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <ctype.h>
 
 #define BIND_IP_ADDR "127.0.0.1"
 #define BIND_PORT 8000
@@ -35,20 +36,57 @@ typedef struct thread_pool {
 thread_pool_t pool;
 int serv_sock;
 
-void parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len)
+// 去除首尾空格
+void trim(char *s, ssize_t* path_len)
+{
+    char *ptr;
+    while(isspace(*s)) s++;
+    if(*s == 0) return ;
+    ptr = s + strlen(s) - 1;
+    while(ptr > s && isspace(*ptr)) ptr--;
+    *(ptr + 1) = '\0';
+    *path_len = ptr - s + 1;
+    return ;
+}
+
+void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version)
+{
+    ssize_t s1 = 0;
+    while(s1 < req_len && req[s1] != ' ') {
+        method[s1] = req[s1];
+        s1++;
+    }
+    method[s1] = '\0';
+    ssize_t s2 = s1 + 1;
+    while(s2 < req_len && req[s2] != ' ') {
+        url[s2 - s1 - 1] = req[s2];
+        s2++;
+    }
+    url[s2 - s1 - 1] = '\0';
+    strcpy(version,req+s2+1);
+}
+
+// 解析 HTTP 请求
+int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len, char *version)
 {
     char* req = request;
+    char *method = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    char *url = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    //char *version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
 
-    // 一个粗糙的解析方法，可能有 BUG！
-    // 获取第一个空格 (s1) 和第二个空格 (s2) 之间的内容，为 PATH
-    ssize_t s1 = 0;
-    while(s1 < req_len && req[s1] != ' ') s1++;
-    ssize_t s2 = s1 + 1;
-    while(s2 < req_len && req[s2] != ' ') s2++;
-
-    memcpy(path, req + s1 + 1, (s2 - s1 - 1) * sizeof(char));
-    path[s2 - s1 - 1] = '\0';
-    *path_len = (s2 - s1 - 1);
+    divide_request(req,req_len,method,url,version);
+    ssize_t url_len = strlen(url);
+    ssize_t ver_len = strlen(version);
+    // 如果请求的方法不为GET/请求的URL不以'/'开头/请求的版本号不为HTTP/开头或不以\r\n结尾，则返回错误
+    if(strcmp(method,"GET") != 0 || url[0] != '/' || ver_len < 2) {
+        return -1;
+    }
+    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n') || strncmp(version,"HTTP/",5) != 0) {
+        return -1;
+    }
+    memcpy(path,url,url_len+1);
+    *path_len = url_len;
+    return 0;
 }
 
 void handle_clnt(int clnt_sock)
@@ -58,6 +96,7 @@ void handle_clnt(int clnt_sock)
     // 一个粗糙的读取方法，可能有 BUG！
     // 读取客户端发送来的数据，并解析
     char* req_buf = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    char* version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
     // 将 clnt_sock 作为一个文件描述符，读取最多 MAX_RECV_LEN 个字符
     // 但一次读取并不保证已经将整个请求读取完整
     ssize_t req_len = read(clnt_sock, req_buf, MAX_RECV_LEN);
@@ -65,16 +104,41 @@ void handle_clnt(int clnt_sock)
     // 根据 HTTP 请求的内容，解析资源路径和 Host 头
     char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
     ssize_t path_len;
-    parse_request(req_buf, req_len, path, &path_len);
+    int ret = parse_request(req_buf, req_len, path, &path_len, version);
 
     // 构造要返回的数据
     // 这里没有去读取文件内容，而是以返回请求资源路径作为示例，并且永远返回 200
     // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
     char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
-    sprintf(response,
-        "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
-        HTTP_STATUS_200, path_len, path);
-    size_t response_len = strlen(response);
+    size_t response_len;
+    //ssize_t ver_len = strlen(version);
+    if(ret == 0) {
+        if(strncmp(version,"HTTP/1.0",8) == 0) {
+            sprintf(response,
+                "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
+                HTTP_STATUS_200, path_len, path);
+        }
+        else if(strncmp(version,"HTTP/1.1",8) == 0) {
+            sprintf(response,
+                "HTTP/1.1 %s\r\nContent-Length: %zd\r\n\r\n%s",
+                HTTP_STATUS_200, path_len, path);
+        }
+        else if(strncmp(version,"HTTP/2.0",8) == 0) {
+            sprintf(response,
+                "HTTP/2.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
+                HTTP_STATUS_200, path_len, path);
+        }
+        else {
+            sprintf(response,
+            "500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
+        }
+        response_len = strlen(response);
+    }
+    else if(ret == -1) {
+        sprintf(response,
+            "500 Internal Server Error\r\nContent-Length: 0\r\n\r\n");
+        response_len = strlen(response);
+    }
 
     // 通过 clnt_sock 向客户端发送信息
     // 将 clnt_sock 作为文件描述符写内容
