@@ -110,20 +110,26 @@ int get_content(char *path, long *file_size, char **content)
     }
     snprintf(file_path, 2*MAX_PATH_LEN, "%s%s", cur_dir, path);
 
+    *content = NULL;
+
     struct stat path_stat;
-    if(stat(file_path, &path_stat) == -1 || S_ISDIR(path_stat.st_mode)) {
-        //perror("stat error!\n");
+    if(stat(file_path, &path_stat) == -1) {
+        //if(S_ISDIR(path_stat.st_mode))
+          //  return -1;
+        return -2;
+    }
+    if(S_ISDIR(path_stat.st_mode)) {
+        printf("%s is a directory!\n", file_path);
         return -1;
     }
     if(access(file_path, F_OK) == -1) {
         // 请求资源不存在时，返回-2
-        //perror("access error!\n");
+        perror("access error!\n");
         return -2;
     }
     
     FILE *file = fopen(file_path, "r");
     if (file == NULL) {
-        //printf("file_path: %s\n", file_path);
         perror("fopen error!\n");
         return -2;
     }
@@ -132,6 +138,7 @@ int get_content(char *path, long *file_size, char **content)
     *file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
+    printf("file_size: %ld\n", *file_size);
     *content = (char*) malloc((*file_size + 1) * sizeof(char));
     if(*content == NULL) {
         perror("malloc error!\n");
@@ -141,7 +148,6 @@ int get_content(char *path, long *file_size, char **content)
 
     fread(*content, 1, *file_size, file);
     (*content)[*file_size] = '\0';
-    //printf("%s",content);
 
     fclose(file);
 
