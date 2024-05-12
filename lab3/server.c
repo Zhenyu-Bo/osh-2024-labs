@@ -127,6 +127,7 @@ int get_content(char *path, long *file_size, char **content)
         return -2;
     }
 
+    // 判断访问路径是否跳出当前路径
     char *real_path = realpath(file_path, NULL);
     if(real_path == NULL) {
         perror("realpath error!\n");
@@ -144,6 +145,7 @@ int get_content(char *path, long *file_size, char **content)
     FILE *file = fopen(file_path, "r");
     if (file == NULL) {
         perror("fopen error!\n");
+        free(file_path);
         return -2;
     }
 
@@ -168,55 +170,8 @@ int get_content(char *path, long *file_size, char **content)
     return 0;
 }
 
-void handle_clnt(int clnt_sock)
-{   
-    // 处理任务时先休眠5秒，同时处理两个任务，观察两个任务是否能够同时响应来判断是否成功实现连接请求的多线程并发处理
-    //sleep(5); 
-    // 一个粗糙的读取方法，可能有 BUG！
-    // 读取客户端发送来的数据，并解析
-    char* req_buf = (char*) malloc(MAX_RECV_LEN * sizeof(char));
-    char* version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
-    // 将 clnt_sock 作为一个文件描述符，读取最多 MAX_RECV_LEN 个字符
-    // 但一次读取并不保证已经将整个请求读取完整
-    //ssize_t req_len = read(clnt_sock, req_buf, MAX_RECV_LEN);
-    ssize_t req_len = 0;
-    ssize_t n = 0;
-    ssize_t max_recv_len = MAX_RECV_LEN;
-    // 读取请求，直到遇到 "\r\n\r\n"
-    while (1) {
-        n = read(clnt_sock, req_buf + req_len, max_recv_len - req_len);
-        if (n == 0) {
-            break;
-        }
-        else if(n < 0) {
-            perror("read error!\n");
-            return;
-        }
-        req_len += n;
-        if (req_len >= 4 && strcmp(req_buf + req_len - 4, "\r\n\r\n") == 0) {
-            break;
-        }
-        if(req_len >= max_recv_len) {
-            max_recv_len *= 2;
-            req_buf = (char *)realloc(req_buf, max_recv_len * sizeof(char));
-            if(!req_buf) {
-                perror("realloc error!\n");
-                return;
-            }
-        }   
-    }
-
-    // 根据 HTTP 请求的内容，解析资源路径和 Host 头
-    char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
-    ssize_t path_len;
-    int ret = parse_request(req_buf, req_len, path, &path_len, version);
-    long file_size;
-    char* content = NULL;
-    int ret_2 = get_content(path, &file_size, &content);
-    // 构造要返回的数据
-    // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
-    char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
-    size_t response_len;
+void write_response(char *response, int ret, int ret_2, long file_size, char *content) 
+{
     size_t status_200_len = strlen("HTTP/1.0 200 OK\r\nContent-Length: \r\n\r\n");
     if(ret == -1 || ret_2 == -1) {
         sprintf(response,
@@ -242,20 +197,62 @@ void handle_clnt(int clnt_sock)
             "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
             HTTP_STATUS_200, file_size, content);
     }
+}
+
+void handle_clnt(int clnt_sock)
+{
+    // 读取客户端发送来的数据，并解析
+    char* req_buf = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    char* version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+
+    ssize_t req_len = 0;
+    ssize_t n = 0;
+    ssize_t max_recv_len = MAX_RECV_LEN;
+    // 读取请求，直到遇到 "\r\n\r\n"
+    while (1) {
+        n = read(clnt_sock, req_buf + req_len, max_recv_len - req_len);
+        if(n < 0) {
+            perror("read error!\n");
+            free(req_buf);
+            return;
+        }
+        req_len += n;
+        if (req_len >= 4 && strcmp(req_buf + req_len - 4, "\r\n\r\n") == 0) {
+            break;
+        }
+        if(req_len >= max_recv_len) {
+            max_recv_len *= 2;
+            char *new_req_buf = (char *)realloc(req_buf, max_recv_len * sizeof(char));
+            if(!new_req_buf) {
+                perror("realloc error!\n");
+                free(req_buf);
+                return;
+            }
+            req_buf = new_req_buf;
+        }   
+    }
+
+    // 根据 HTTP 请求的内容，解析资源路径和 Host 头
+    char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
+    ssize_t path_len;
+    int ret = parse_request(req_buf, req_len, path, &path_len, version);
+    long file_size;
+    char* content = NULL;
+    int ret_2 = get_content(path, &file_size, &content);
+    // 构造要返回的数据
+    // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
+    char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
+    size_t response_len;
+    write_response(response, ret, ret_2, file_size, content);
     response_len = strlen(response);
-    // 通过 clnt_sock 向客户端发送信息
-    // 将 clnt_sock 作为文件描述符写内容
-    //write(clnt_sock, response, response_len);
+
     // 写入响应，直到所有数据都被写入
     ssize_t total_written = 0;
     while (total_written < response_len) {
         n = write(clnt_sock, response + total_written, response_len - total_written);
-        if (n == 0) {
-            break;
-        }
-        else if(n < 0) {
+        if(n < 0) {
             perror("write error!\n");
-            return;
+            goto end;
         }
         total_written += n;
     }
@@ -264,11 +261,13 @@ void handle_clnt(int clnt_sock)
     close(clnt_sock);
 
     // 释放内存
+end:
     free(req_buf);
     free(path);
     free(response);
     free(version);
     free(content);
+    return;
 }
 
 void *thread_func(void* arg)
