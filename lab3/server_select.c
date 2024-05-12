@@ -21,7 +21,7 @@
 #define MAX_PATH_LEN 1024
 #define MAX_HOST_LEN 1024
 #define MAX_CONN 20
-#define THREAD_POOL_SIZE 20
+#define THREAD_POOL_SIZE 100
 
 #define HTTP_STATUS_200 "200 OK"
 #define HTTP_STATUS_404 "404 Not Found"
@@ -85,7 +85,7 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
     if(strcmp(method,"GET") != 0 || url[0] != '/' || ver_len < 2) {
         return -1;
     }
-    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n') || strncmp(version,"HTTP/1.0",8) != 0) {
+    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n')) {
         return -1;
     }
     memcpy(path,url,url_len+1);
