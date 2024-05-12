@@ -111,6 +111,22 @@ int get_content(char *path, long *file_size, char **content)
     }
     snprintf(file_path, 2*MAX_PATH_LEN, "%s%s", cur_dir, path);
 
+    *content = NULL;
+
+    struct stat path_stat;
+    if(stat(file_path, &path_stat) == -1) {
+        return -2;
+    }
+    if(S_ISDIR(path_stat.st_mode)) {
+        fprintf(stderr, "%s is a directory!\n", file_path);
+        return -1;
+    }
+    if(access(file_path, F_OK) == -1) {
+        // 请求资源不存在时，返回-2
+        perror("access error!\n");
+        return -2;
+    }
+
     char *real_path = realpath(file_path, NULL);
     if(real_path == NULL) {
         perror("realpath error!\n");
@@ -123,26 +139,6 @@ int get_content(char *path, long *file_size, char **content)
         free(real_path);
         free(file_path);
         return -1;
-    }
-    printf("%s\n",file_path);
-    printf("%s\n",real_path);
-
-    *content = NULL;
-
-    struct stat path_stat;
-    if(stat(file_path, &path_stat) == -1) {
-        //if(S_ISDIR(path_stat.st_mode))
-          //  return -1;
-        return -2;
-    }
-    if(S_ISDIR(path_stat.st_mode)) {
-        printf("%s is a directory!\n", file_path);
-        return -1;
-    }
-    if(access(file_path, F_OK) == -1) {
-        // 请求资源不存在时，返回-2
-        perror("access error!\n");
-        return -2;
     }
     
     FILE *file = fopen(file_path, "r");
@@ -182,7 +178,33 @@ void handle_clnt(int clnt_sock)
     char* version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
     // 将 clnt_sock 作为一个文件描述符，读取最多 MAX_RECV_LEN 个字符
     // 但一次读取并不保证已经将整个请求读取完整
-    ssize_t req_len = read(clnt_sock, req_buf, MAX_RECV_LEN);
+    //ssize_t req_len = read(clnt_sock, req_buf, MAX_RECV_LEN);
+    ssize_t req_len = 0;
+    ssize_t n = 0;
+    ssize_t max_recv_len = MAX_RECV_LEN;
+    // 读取请求，直到遇到 "\r\n\r\n"
+    while (1) {
+        n = read(clnt_sock, req_buf + req_len, max_recv_len - req_len);
+        if (n == 0) {
+            break;
+        }
+        else if(n < 0) {
+            perror("read error!\n");
+            return;
+        }
+        req_len += n;
+        if (req_len >= 4 && strcmp(req_buf + req_len - 4, "\r\n\r\n") == 0) {
+            break;
+        }
+        if(req_len >= max_recv_len) {
+            max_recv_len *= 2;
+            req_buf = (char *)realloc(req_buf, max_recv_len * sizeof(char));
+            if(!req_buf) {
+                perror("realloc error!\n");
+                return;
+            }
+        }   
+    }
 
     // 根据 HTTP 请求的内容，解析资源路径和 Host 头
     char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
@@ -195,7 +217,7 @@ void handle_clnt(int clnt_sock)
     // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
     char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
     size_t response_len;
-    
+    size_t status_200_len = strlen("HTTP/1.0 200 OK\r\nContent-Length: \r\n\r\n");
     if(ret == -1 || ret_2 == -1) {
         sprintf(response,
             "HTTP/1.0 %s \r\nContent-Length: 0\r\n\r\n",
@@ -207,6 +229,15 @@ void handle_clnt(int clnt_sock)
             HTTP_STATUS_404);
     }
     else if(ret == 0 && ret_2 == 0) {
+        size_t total_len = status_200_len + sizeof(file_size) + strlen(content) + 1;
+        if(total_len > MAX_SEND_LEN) {
+            char *new_response = (char *)realloc(response, total_len * sizeof(char));
+            if(!new_response) {
+                perror("realloc error!\n");
+                return;
+            }
+            response = new_response;
+        }
         sprintf(response,
             "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
             HTTP_STATUS_200, file_size, content);
@@ -214,7 +245,20 @@ void handle_clnt(int clnt_sock)
     response_len = strlen(response);
     // 通过 clnt_sock 向客户端发送信息
     // 将 clnt_sock 作为文件描述符写内容
-    write(clnt_sock, response, response_len);
+    //write(clnt_sock, response, response_len);
+    // 写入响应，直到所有数据都被写入
+    ssize_t total_written = 0;
+    while (total_written < response_len) {
+        n = write(clnt_sock, response + total_written, response_len - total_written);
+        if (n == 0) {
+            break;
+        }
+        else if(n < 0) {
+            perror("write error!\n");
+            return;
+        }
+        total_written += n;
+    }
 
     // 关闭客户端套接字
     close(clnt_sock);
