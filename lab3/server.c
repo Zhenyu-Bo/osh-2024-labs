@@ -94,21 +94,38 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
 
 int get_content(char *path, long *file_size, char **content)
 {
-    char cur_dir[1024];
+    char cur_dir[MAX_PATH_LEN];
     if(getcwd(cur_dir,sizeof(cur_dir)) == NULL) {
         perror("getcwd error!\n");
         return -1;
     }
-    char *file_path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
+    char *file_path = (char*) malloc(MAX_PATH_LEN * 2 * sizeof(char));
     if(file_path == NULL) {
-        //perror("malloc error!\n");
+        perror("malloc error!\n");
         return -1;
     }
 
     if(strlen(cur_dir) + strlen(path) + 2 > 2*MAX_PATH_LEN) {
+        free(file_path);
         return -1;
     }
     snprintf(file_path, 2*MAX_PATH_LEN, "%s%s", cur_dir, path);
+
+    char *real_path = realpath(file_path, NULL);
+    if(real_path == NULL) {
+        perror("realpath error!\n");
+        free(file_path);
+        return -1;
+    }
+    // 检查绝对路径是否以当前目录为前缀
+    if (strncmp(real_path, cur_dir, strlen(cur_dir)) != 0) {
+        fprintf(stderr, "Error: Path traversal attempt detected\n");
+        free(real_path);
+        free(file_path);
+        return -1;
+    }
+    printf("%s\n",file_path);
+    printf("%s\n",real_path);
 
     *content = NULL;
 
@@ -138,7 +155,6 @@ int get_content(char *path, long *file_size, char **content)
     *file_size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
-    printf("file_size: %ld\n", *file_size);
     *content = (char*) malloc((*file_size + 1) * sizeof(char));
     if(*content == NULL) {
         perror("malloc error!\n");
