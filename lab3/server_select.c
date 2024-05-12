@@ -21,37 +21,13 @@
 #define MAX_PATH_LEN 1024
 #define MAX_HOST_LEN 1024
 #define MAX_CONN 20
-#define THREAD_POOL_SIZE 100
+#define THREAD_POOL_SIZE 20
 
 #define HTTP_STATUS_200 "200 OK"
 #define HTTP_STATUS_404 "404 Not Found"
 #define HTTP_STATUS_500 "500 Internal Server Error"
 
-// 线程池结构体
-typedef struct thread_pool {
-    pthread_t threads[THREAD_POOL_SIZE]; // 线程数组
-    int queue[MAX_CONN]; // 任务队列
-    int head; // 任务队列的头部
-    int tail; // 任务队列的尾部
-    sem_t sem_queue; // 任务队列的信号量
-    pthread_mutex_t mutex_queue; // 互斥锁，用于保护任务队列的并发访问
-} thread_pool_t;
-
-thread_pool_t pool;
 int serv_sock;
-
-// 去除首尾空格
-void trim(char *s, ssize_t* path_len)
-{
-    char *ptr;
-    while(isspace(*s)) s++;
-    if(*s == 0) return ;
-    ptr = s + strlen(s) - 1;
-    while(ptr > s && isspace(*ptr)) ptr--;
-    *(ptr + 1) = '\0';
-    *path_len = ptr - s + 1;
-    return ;
-}
 
 void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version)
 {
@@ -271,37 +247,10 @@ end:
     return;
 }
 
-void *thread_func(void* arg)
-{
-    while (1)
-    {
-        // 等待信号量
-        sem_wait(&pool.sem_queue);
-        // 从任务队列中取出一个任务
-        pthread_mutex_lock(&pool.mutex_queue);
-        int clnt_sock = pool.queue[pool.head];
-        pool.head = (pool.head + 1) % MAX_CONN;
-        pthread_mutex_unlock(&pool.mutex_queue);
-        // 处理任务
-        handle_clnt(clnt_sock);
-    }
-    return NULL;
-}
-
 void handle_signal(int sig)
 {
     if(sig == SIGINT)
     {
-        for(int i = 0;i < THREAD_POOL_SIZE;i++)
-        {
-            pthread_cancel(pool.threads[i]);
-            pthread_join(pool.threads[i],NULL);
-        }
-
-        // 销毁信号量和互斥锁
-        sem_destroy(&pool.sem_queue);
-        pthread_mutex_destroy(&pool.mutex_queue);
-
         // 关闭套接字
         close(serv_sock);
         // 打印换行符，使得输出更加美观
@@ -360,13 +309,13 @@ int main(){
                     if (clnt_sock > fd_max) {
                         fd_max = clnt_sock;
                     }
-                    printf("new client: %d\n", clnt_sock);
+                    //printf("new client: %d\n", clnt_sock);
                 } else { // read from client
                     handle_clnt(i);
 
                     FD_CLR(i, &reads);
                     close(i);
-                    printf("client closed: %d\n", i);
+                    //printf("client closed: %d\n", i);
                 }
             }
         }

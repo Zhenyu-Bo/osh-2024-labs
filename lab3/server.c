@@ -39,19 +39,6 @@ typedef struct thread_pool {
 thread_pool_t pool;
 int serv_sock;
 
-// 去除首尾空格
-void trim(char *s, ssize_t* path_len)
-{
-    char *ptr;
-    while(isspace(*s)) s++;
-    if(*s == 0) return ;
-    ptr = s + strlen(s) - 1;
-    while(ptr > s && isspace(*ptr)) ptr--;
-    *(ptr + 1) = '\0';
-    *path_len = ptr - s + 1;
-    return ;
-}
-
 void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version)
 {
     ssize_t s1 = 0;
