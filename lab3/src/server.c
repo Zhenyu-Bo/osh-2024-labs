@@ -19,8 +19,8 @@
 #define MAX_SEND_LEN 1048576
 #define MAX_PATH_LEN 1024
 #define MAX_HOST_LEN 1024
-#define MAX_CONN 20
-#define THREAD_POOL_SIZE 100
+#define MAX_CONN 150
+#define THREAD_POOL_SIZE 150
 
 #define HTTP_STATUS_200 "200 OK"
 #define HTTP_STATUS_404 "404 Not Found"
@@ -39,7 +39,7 @@ typedef struct thread_pool {
 thread_pool_t pool;
 int serv_sock;
 
-void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version)
+void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version,char *host)
 {
     ssize_t s1 = 0;
     while(s1 < req_len && req[s1] != ' ') {
@@ -53,7 +53,20 @@ void divide_request(char *req, ssize_t req_len, char *method,char *url,char *ver
         s2++;
     }
     url[s2 - s1 - 1] = '\0';
-    strcpy(version,req+s2+1);
+    ssize_t s3 = s2 + 1;
+    while(s3 < req_len && req[s3] != '\n') {
+        version[s3 - s2 - 1] = req[s3];
+        s3++;
+    }
+    version[s3 - s2 - 1] = '\n';
+    version[s3- s2] = '\0';
+    ssize_t s4 = s3 + 1;
+    while(s4 < req_len && req[s4] != '\n') {
+        host[s4 - s3 - 1] = req[s4];
+        s4++;
+    }
+    host[s4 - s3 - 1] = '\n';
+    host[s4 - s3] = '\0';
 }
 
 // 解析 HTTP 请求
@@ -62,18 +75,21 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
     char* req = request;
     char *method = (char*) malloc(MAX_RECV_LEN * sizeof(char));
     char *url = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    char *host = (char *)malloc(MAX_RECV_LEN * sizeof(char));
     //char *version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
 
-    divide_request(req,req_len,method,url,version);
+    divide_request(req, req_len, method, url, version, host);
     ssize_t url_len = strlen(url);
-    ssize_t ver_len = strlen(version);
+    //ssize_t ver_len = strlen(version);
     // 如果请求的方法不为GET/请求的URL不以'/'开头/请求的版本号不为HTTP/开头或不以\r\n结尾，则返回错误
-    if(strcmp(method,"GET") != 0 || url[0] != '/' || ver_len < 2) {
+    if (strcmp(method,"GET") != 0 || url[0] != '/' ||
+        (strncmp(version,"HTTP/1.0\r\n",10) != 0 && strncmp(version, "HTTP/1.1\r\n",10) != 0) ||
+        strncmp(host, "Host: 127.0.0.1:8000\r\n", 22) != 0) {
         return -1;
     }
-    else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n')/* || strncmp(version,"HTTP/1.0",8) != 0*/) {
+    /*else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n')) {
         return -1;
-    }
+    }*/
     memcpy(path,url,url_len+1);
     *path_len = url_len;
     return 0;
