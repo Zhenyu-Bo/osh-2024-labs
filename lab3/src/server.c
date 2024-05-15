@@ -32,12 +32,19 @@ typedef struct thread_pool {
     int queue[MAX_CONN]; // 任务队列
     int head; // 任务队列的头部
     int tail; // 任务队列的尾部
+    int clnt_socks[MAX_CONN];
+    int clnt_cnt;
     sem_t sem_queue; // 任务队列的信号量
     pthread_mutex_t mutex_queue; // 互斥锁，用于保护任务队列的并发访问
+    pthread_cond_t queue_not_full; // 条件变量，用于判断任务队列是否已满
+    pthread_cond_t queue_not_empty; // 条件变量，用于判断任务队列是否为空
+    int shutdown;
 } thread_pool_t;
 
 thread_pool_t pool;
+
 int serv_sock;
+int clnt_sock;
 
 void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version,char *host)
 {
@@ -163,7 +170,9 @@ int get_content(char *path, long *file_size, char **content)
         return -1;
     }
 
-    fread(*content, 1, *file_size, file);
+    if(fread(*content, 1, *file_size, file) < 0) {
+        perror("read error!\n");
+    }
     (*content)[*file_size] = '\0';
 
     fclose(file);
@@ -173,9 +182,8 @@ int get_content(char *path, long *file_size, char **content)
     return 0;
 }
 
-void write_response(char *response, int ret, int ret_2, long file_size, char *content) 
+int write_response(char *response, int ret, int ret_2, long file_size, int clnt_sock) 
 {
-    size_t status_200_len = strlen("HTTP/1.0 200 OK\r\nContent-Length: \r\n\r\n");
     if(ret == -1 || ret_2 == -1) {
         sprintf(response,
             "HTTP/1.0 %s \r\nContent-Length: 0\r\n\r\n",
@@ -187,19 +195,23 @@ void write_response(char *response, int ret, int ret_2, long file_size, char *co
             HTTP_STATUS_404);
     }
     else if(ret == 0 && ret_2 == 0) {
-        size_t total_len = status_200_len + sizeof(file_size) + strlen(content) + 1;
-        if(total_len > MAX_SEND_LEN) {
-            char *new_response = (char *)realloc(response, total_len * sizeof(char));
-            if(!new_response) {
-                perror("realloc error!\n");
-                return;
-            }
-            response = new_response;
-        }
         sprintf(response,
-            "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n%s",
-            HTTP_STATUS_200, file_size, content);
+            "HTTP/1.0 %s\r\nContent-Length: %zd\r\n\r\n",
+            HTTP_STATUS_200, file_size);
     }
+    ssize_t response_len = strlen(response);
+
+    // 写入响应，直到所有数据都被写入
+    ssize_t write_len = 0;
+    while(response_len > 0) {
+        if((write_len = write(clnt_sock, response, response_len)) < 0) {
+            perror("write error!\n");
+            return -1;
+        }
+        response += write_len;
+        response_len -= write_len;
+    }
+    return 0;
 }
 
 void handle_clnt(int clnt_sock)
@@ -245,21 +257,23 @@ void handle_clnt(int clnt_sock)
     // 构造要返回的数据
     // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
     char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
-    size_t response_len;
-    write_response(response, ret, ret_2, file_size, content);
-    response_len = strlen(response);
-
-    // 写入响应，直到所有数据都被写入
-    ssize_t total_written = 0;
-    while (total_written < response_len) {
-        n = write(clnt_sock, response + total_written, response_len - total_written);
-        if(n < 0) {
-            perror("write error!\n");
-            goto end;
-        }
-        total_written += n;
+    //size_t response_len;
+    if(write_response(response, ret, ret_2, file_size, clnt_sock) == -1){
+        free(content);
+        goto end;
     }
-
+    if(ret_2 == 0) {
+        ssize_t content_len = strlen(content);
+        while(content_len > 0) {
+            ssize_t n = write(clnt_sock, content, content_len);
+            if(n < 0) {
+                perror("write error!\n");
+                goto end;
+            }
+            content += n;
+            content_len -= n;
+        }
+    }
     // 关闭客户端套接字
     close(clnt_sock);
 
@@ -269,7 +283,7 @@ end:
     free(path);
     free(response);
     free(version);
-    free(content);
+    //free(content);
     return;
 }
 
@@ -283,9 +297,16 @@ void *thread_func(void* arg)
         pthread_mutex_lock(&pool.mutex_queue);
         int clnt_sock = pool.queue[pool.head];
         pool.head = (pool.head + 1) % MAX_CONN;
+        if((pool.tail + 1) % MAX_CONN != pool.head) {
+            pthread_cond_signal(&pool.queue_not_full);
+        }
         pthread_mutex_unlock(&pool.mutex_queue);
+        if(pool.shutdown) {
+            break;
+        }
         // 处理任务
         handle_clnt(clnt_sock);
+        close(clnt_sock);
     }
     return NULL;
 }
@@ -294,18 +315,24 @@ void handle_signal(int sig)
 {
     if(sig == SIGINT)
     {
+        pthread_mutex_lock(&pool.mutex_queue);
+        pool.shutdown = 1;
         for(int i = 0;i < THREAD_POOL_SIZE;i++)
         {
             pthread_cancel(pool.threads[i]);
             pthread_join(pool.threads[i],NULL);
         }
-
+        for(int i = 0;i < pool.clnt_cnt;i++) {
+            close(pool.clnt_socks[i]);
+        }
+        pthread_mutex_unlock(&pool.mutex_queue);
         // 销毁信号量和互斥锁
         sem_destroy(&pool.sem_queue);
         pthread_mutex_destroy(&pool.mutex_queue);
 
         // 关闭套接字
         close(serv_sock);
+        
         // 打印换行符，使得输出更加美观
         printf("\n");
         //结束程序
@@ -320,7 +347,6 @@ int main(){
     //   AF_INET: 使用 IPv4
     //   SOCK_STREAM: 面向连接的数据传输方式
     //   IPPROTO_TCP: 使用 TCP 协议
-    //int serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
     // 将套接字和指定的 IP、端口绑定
@@ -346,8 +372,11 @@ int main(){
     // 初始化线程池
     sem_init(&pool.sem_queue, 0, 0);
     pthread_mutex_init(&pool.mutex_queue, NULL);
+    pthread_cond_init(&pool.queue_not_full, NULL);
+    pthread_cond_init(&pool.queue_not_empty, NULL);
     pool.head = 0;
     pool.tail = 0;
+    pool.clnt_cnt = 0;
     for(int i = 0;i < THREAD_POOL_SIZE;i++)
     {
         pthread_create(&pool.threads[i], NULL, thread_func, NULL);
@@ -356,25 +385,21 @@ int main(){
     while (1) // 一直循环
     {
         // 当没有客户端连接时，accept() 会阻塞程序执行，直到有客户端连接进来
-        int clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr, &clnt_addr_size);
+        clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr, &clnt_addr_size);
         // 处理客户端的请求
         //handle_clnt(clnt_sock);
         pthread_mutex_lock(&pool.mutex_queue);
-
-        if((pool.tail + 1) % MAX_CONN == pool.head) {
-            // 队列已满时拒绝新的连接
-            pthread_mutex_unlock(&pool.mutex_queue);  // 解锁任务队列的互斥锁
-            close(clnt_sock);
-        } else {
-            pool.queue[pool.tail] = clnt_sock;
-            pool.tail = (pool.tail + 1) % MAX_CONN;
-            pthread_mutex_unlock(&pool.mutex_queue);
-            sem_post(&pool.sem_queue);
-        }   
+        // 线程池已满时等待
+        while((pool.tail + 1) % MAX_CONN == pool.head) {
+            pthread_cond_wait(&pool.queue_not_full, &pool.mutex_queue);
+        }
+        pool.queue[pool.tail] = clnt_sock;
+        pool.clnt_socks[pool.clnt_cnt++] = clnt_sock;
+        pool.tail = (pool.tail + 1) % MAX_CONN;
+        if(pool.head != pool.tail) {
+            pthread_cond_signal(&pool.queue_not_empty);
+        }
+        pthread_mutex_unlock(&pool.mutex_queue);
+        sem_post(&pool.sem_queue);
     }
-
-    // 实际上这里的代码不可到达，可以在 while 循环中收到 SIGINT 信号时主动 break
-    // 关闭套接字
-    //close(serv_sock);
-    //return 0;
 }
