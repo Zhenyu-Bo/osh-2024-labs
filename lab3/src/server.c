@@ -216,6 +216,7 @@ void handle_clnt(int clnt_sock)
             if(errno == EINTR) continue;
             perror("read error!\n");
             free(req_buf);
+            close(clnt_sock);
             return;
         }
         req_len += n;
