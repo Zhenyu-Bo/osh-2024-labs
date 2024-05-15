@@ -49,6 +49,11 @@ thread_pool_t pool;
 int serv_sock;
 int clnt_sock;
 
+void print_perror(char *str) {
+    perror(str);
+    exit(1);
+}
+
 void divide_request(char *req, ssize_t req_len, char *method,char *url,char *version,char *host)
 {
     ssize_t s1 = 0;
@@ -90,16 +95,14 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
 
     divide_request(req, req_len, method, url, version, host);
     ssize_t url_len = strlen(url);
+    ssize_t host_len = strlen(host);
     //ssize_t ver_len = strlen(version);
     // 如果请求的方法不为GET/请求的URL不以'/'开头/请求的版本号不为HTTP/开头或不以\r\n结尾，则返回错误
     if (strcmp(method,"GET") != 0 || url[0] != '/' ||
         (strncmp(version,"HTTP/1.0\r\n",10) != 0 && strncmp(version, "HTTP/1.1\r\n",10) != 0) ||
-        strncmp(host, "Host: 127.0.0.1:8000\r\n", 22) != 0) {
+        strncmp(host, "Host: ", 6) != 0 || host[host_len-2] != '\r' || host[host_len-1] != '\n') {
         return -1;
     }
-    /*else if(!(version[ver_len-2] == '\r' && version[ver_len-1] == '\n')) {
-        return -1;
-    }*/
     memcpy(path,url,url_len+1);
     *path_len = url_len;
     return 0;
@@ -205,6 +208,11 @@ void handle_clnt(int clnt_sock)
     // 读取客户端发送来的数据，并解析
     char* req_buf = (char*) malloc(MAX_RECV_LEN * sizeof(char));
     char* version = (char*) malloc(MAX_RECV_LEN * sizeof(char));
+    // 构造要返回的数据
+    // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
+    char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char));
+    // 根据 HTTP 请求的内容，解析资源路径和 Host 头
+    char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
 
     ssize_t req_len = 0;
     ssize_t n = 0;
@@ -215,11 +223,13 @@ void handle_clnt(int clnt_sock)
         if(n < 0) {
             if(errno == EINTR) continue;
             perror("read error!\n");
-            free(req_buf);
-            close(clnt_sock);
-            return;
+            goto end;
         }
         req_len += n;
+        if(strlen(req_buf) >= 3 && strncmp(req_buf, "GET", 3) != 0) {
+            write_response(response, -1, -1, 0, clnt_sock);
+            goto end;
+        }
         if (req_len >= 4 && strcmp(req_buf + req_len - 4, "\r\n\r\n") == 0) {
             break;
         }
@@ -228,26 +238,21 @@ void handle_clnt(int clnt_sock)
             char *new_req_buf = (char *)realloc(req_buf, max_recv_len * sizeof(char));
             if(!new_req_buf) {
                 perror("realloc error!\n");
-                free(req_buf);
-                return;
+                goto end;
             }
             req_buf = new_req_buf;
         }   
     }
 
-    // 根据 HTTP 请求的内容，解析资源路径和 Host 头
-    char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
+    
     ssize_t path_len;
     int ret_1 = parse_request(req_buf, req_len, path, &path_len, version);
     long file_size;
-    char* content = NULL;
+    //char* content = NULL;
     FILE *file = NULL;
     int ret_2 = get_content(path, &file_size, &file);
-    // 构造要返回的数据
-    // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
-    char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
+    
     if(write_response(response, ret_1, ret_2, file_size, clnt_sock) == -1){
-        free(content);
         goto end;
     }
     if(ret_2 == 0) {
@@ -272,10 +277,10 @@ void handle_clnt(int clnt_sock)
     }
     //fclose(file);
     // 关闭客户端套接字
+end:
     close(clnt_sock);
 
     // 释放内存
-end:
     free(req_buf);
     free(path);
     free(response);
@@ -309,45 +314,13 @@ void *thread_func(void* arg)
     return NULL;
 }
 
-void handle_signal(int sig)
-{
-    if(sig == SIGINT)
-    {
-        pthread_mutex_lock(&pool.mutex_queue);
-        pool.shutdown = 1;
-        for(int i = 0;i < THREAD_POOL_SIZE;i++)
-        {
-            pthread_cancel(pool.threads[i]);
-            pthread_join(pool.threads[i],NULL);
-        }
-        for(int i = 0;i < pool.clnt_cnt;i++) {
-            close(pool.clnt_socks[i]);
-        }
-        pthread_mutex_unlock(&pool.mutex_queue);
-        // 销毁信号量和互斥锁
-        sem_destroy(&pool.sem_queue);
-        pthread_mutex_destroy(&pool.mutex_queue);
-        pthread_cond_destroy(&pool.queue_not_empty);
-        pthread_cond_destroy(&pool.queue_not_full);
-
-        // 关闭套接字
-        close(serv_sock);
-        
-        // 打印换行符，使得输出更加美观
-        printf("\n");
-        //结束程序
-        exit(0);
-    }
-}
-
 int main(){
-    // 注册信号处理函数
-    //signal(SIGINT, handle_signal);
     // 创建套接字，参数说明：
     //   AF_INET: 使用 IPv4
     //   SOCK_STREAM: 面向连接的数据传输方式
     //   IPPROTO_TCP: 使用 TCP 协议
-    serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if((serv_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1)
+        print_perror("socket error!\n");
 
     // 将套接字和指定的 IP、端口绑定
     //   用 0 填充 serv_addr（它是一个 sockaddr_in 结构体）
@@ -360,10 +333,12 @@ int main(){
     serv_addr.sin_addr.s_addr = inet_addr(BIND_IP_ADDR);
     serv_addr.sin_port = htons(BIND_PORT);
     //   绑定
-    bind(serv_sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+    if(bind(serv_sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1)
+        print_perror("bind error!\n");
 
     // 使得 serv_sock 套接字进入监听状态，开始等待客户端发起请求
-    listen(serv_sock, MAX_CONN);
+    if(listen(serv_sock, MAX_CONN) == -1)
+        print_perror("listen error!\n");
 
     // 接收客户端请求，获得一个可以与客户端通信的新的生成的套接字 clnt_sock
     struct sockaddr_in clnt_addr;
@@ -379,13 +354,18 @@ int main(){
     pool.clnt_cnt = 0;
     for(int i = 0;i < THREAD_POOL_SIZE;i++)
     {
-        pthread_create(&pool.threads[i], NULL, thread_func, NULL);
+        if(pthread_create(&pool.threads[i], NULL, thread_func, NULL) == -1)
+            print_perror("pthread_create error!\n");
     }
 
     while (1) // 一直循环
     {
         // 当没有客户端连接时，accept() 会阻塞程序执行，直到有客户端连接进来
         clnt_sock = accept(serv_sock, (struct sockaddr*)&clnt_addr, &clnt_addr_size);
+        if(clnt_sock == -1) {
+            perror("accept error!\n");
+            continue;
+        }
         // 处理客户端的请求
         //handle_clnt(clnt_sock);
         pthread_mutex_lock(&pool.mutex_queue);
@@ -402,4 +382,9 @@ int main(){
         pthread_mutex_unlock(&pool.mutex_queue);
         sem_post(&pool.sem_queue);
     }
+    
+    // 实际上这里的代码不可到达，可以在 while 循环中收到 SIGINT 信号时主动 break
+    // 关闭套接字
+    close(serv_sock);
+    return 0;
 }
