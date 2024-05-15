@@ -35,13 +35,13 @@ typedef struct thread_pool {
     int queue[QUEUE_SIZE]; // 任务队列
     int head; // 任务队列的头部
     int tail; // 任务队列的尾部
-    int clnt_socks[MAX_CONN];
-    int clnt_cnt;
+    int clnt_socks[MAX_CONN]; // 存储客户端套接字的数组
+    int clnt_cnt; // 连接的客户端数量
     sem_t sem_queue; // 任务队列的信号量
     pthread_mutex_t mutex_queue; // 互斥锁，用于保护任务队列的并发访问
     pthread_cond_t queue_not_full; // 条件变量，用于判断任务队列是否已满
     pthread_cond_t queue_not_empty; // 条件变量，用于判断任务队列是否为空
-    int shutdown;
+    int shutdown; // 表示线程池是否关闭
 } thread_pool_t;
 
 thread_pool_t pool;
@@ -274,19 +274,16 @@ void handle_clnt(int clnt_sock)
                 write_len += ret;
             }
         }
+        fclose(file);
     }
-    //fclose(file);
-    // 关闭客户端套接字
 end:
-    close(clnt_sock);
-
     // 释放内存
     free(req_buf);
     free(path);
     free(response);
     free(version);
-    if(file != NULL)
-        free(file);
+    //if(file != NULL)
+      //  fclose(file);
     return;
 }
 
