@@ -12,6 +12,7 @@
 #include <signal.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #define BIND_IP_ADDR "127.0.0.1"
 #define BIND_PORT 8000
@@ -212,6 +213,7 @@ void handle_clnt(int clnt_sock)
     while (1) {
         n = read(clnt_sock, req_buf + req_len, max_recv_len - req_len);
         if(n < 0) {
+            if(errno == EINTR) continue;
             perror("read error!\n");
             free(req_buf);
             return;
@@ -259,6 +261,7 @@ void handle_clnt(int clnt_sock)
             while (write_len < n) {
                 ssize_t ret = write(clnt_sock, buffer + write_len, n - write_len);
                 if (ret < 0) {
+                    if(errno == EINTR) continue;
                     perror("write error!\n");
                     break;
                 }
@@ -266,6 +269,7 @@ void handle_clnt(int clnt_sock)
             }
         }
     }
+    //fclose(file);
     // 关闭客户端套接字
     close(clnt_sock);
 
@@ -299,7 +303,7 @@ void *thread_func(void* arg)
         }
         // 处理任务
         handle_clnt(clnt_sock);
-        //close(clnt_sock);
+        close(clnt_sock);
     }
     return NULL;
 }
@@ -322,6 +326,8 @@ void handle_signal(int sig)
         // 销毁信号量和互斥锁
         sem_destroy(&pool.sem_queue);
         pthread_mutex_destroy(&pool.mutex_queue);
+        pthread_cond_destroy(&pool.queue_not_empty);
+        pthread_cond_destroy(&pool.queue_not_full);
 
         // 关闭套接字
         close(serv_sock);
@@ -335,7 +341,7 @@ void handle_signal(int sig)
 
 int main(){
     // 注册信号处理函数
-    signal(SIGINT, handle_signal);
+    //signal(SIGINT, handle_signal);
     // 创建套接字，参数说明：
     //   AF_INET: 使用 IPv4
     //   SOCK_STREAM: 面向连接的数据传输方式
