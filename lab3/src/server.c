@@ -19,8 +19,10 @@
 #define MAX_SEND_LEN 1048576
 #define MAX_PATH_LEN 1024
 #define MAX_HOST_LEN 1024
-#define MAX_CONN 150
-#define THREAD_POOL_SIZE 150
+#define MAX_CONN 1024
+#define THREAD_POOL_SIZE 100
+#define QUEUE_SIZE 40960
+#define BUFFER_SIZE 4096
 
 #define HTTP_STATUS_200 "200 OK"
 #define HTTP_STATUS_404 "404 Not Found"
@@ -29,7 +31,7 @@
 // 线程池结构体
 typedef struct thread_pool {
     pthread_t threads[THREAD_POOL_SIZE]; // 线程数组
-    int queue[MAX_CONN]; // 任务队列
+    int queue[QUEUE_SIZE]; // 任务队列
     int head; // 任务队列的头部
     int tail; // 任务队列的尾部
     int clnt_socks[MAX_CONN];
@@ -102,7 +104,7 @@ int parse_request(char* request, ssize_t req_len, char* path, ssize_t* path_len,
     return 0;
 }
 
-int get_content(char *path, long *file_size, char **content)
+int get_content(char *path, long *file_size, FILE **file)
 {
     char cur_dir[MAX_PATH_LEN];
     if(getcwd(cur_dir,sizeof(cur_dir)) == NULL) {
@@ -120,8 +122,6 @@ int get_content(char *path, long *file_size, char **content)
         return -1;
     }
     snprintf(file_path, 2*MAX_PATH_LEN, "%s%s", cur_dir, path);
-
-    *content = NULL;
 
     struct stat path_stat;
     if(stat(file_path, &path_stat) == -1) {
@@ -152,33 +152,18 @@ int get_content(char *path, long *file_size, char **content)
         return -1;
     }
     
-    FILE *file = fopen(file_path, "r");
-    if (file == NULL) {
+    *file = fopen(file_path, "r");
+    if (*file == NULL) {
         perror("fopen error!\n");
         free(file_path);
         return -2;
     }
 
-    fseek(file, 0, SEEK_END);
-    *file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    *content = (char*) malloc((*file_size + 1) * sizeof(char));
-    if(*content == NULL) {
-        perror("malloc error!\n");
-        fclose(file);
-        return -1;
-    }
-
-    if(fread(*content, 1, *file_size, file) < 0) {
-        perror("read error!\n");
-    }
-    (*content)[*file_size] = '\0';
-
-    fclose(file);
+    fseek(*file, 0, SEEK_END);
+    *file_size = ftell(*file);
+    fseek(*file, 0, SEEK_SET);
 
     free(file_path);
-
     return 0;
 }
 
@@ -250,28 +235,35 @@ void handle_clnt(int clnt_sock)
     // 根据 HTTP 请求的内容，解析资源路径和 Host 头
     char* path = (char*) malloc(MAX_PATH_LEN * sizeof(char));
     ssize_t path_len;
-    int ret = parse_request(req_buf, req_len, path, &path_len, version);
+    int ret_1 = parse_request(req_buf, req_len, path, &path_len, version);
     long file_size;
     char* content = NULL;
-    int ret_2 = get_content(path, &file_size, &content);
+    FILE *file = NULL;
+    int ret_2 = get_content(path, &file_size, &file);
     // 构造要返回的数据
     // 注意，响应头部后需要有一个多余换行（\r\n\r\n），然后才是响应内容
     char* response = (char*) malloc(MAX_SEND_LEN * sizeof(char)) ;
-    //size_t response_len;
-    if(write_response(response, ret, ret_2, file_size, clnt_sock) == -1){
+    if(write_response(response, ret_1, ret_2, file_size, clnt_sock) == -1){
         free(content);
         goto end;
     }
     if(ret_2 == 0) {
-        ssize_t content_len = strlen(content);
-        while(content_len > 0) {
-            ssize_t n = write(clnt_sock, content, content_len);
-            if(n < 0) {
-                perror("write error!\n");
-                goto end;
+        char buffer[BUFFER_SIZE];
+        while (!feof(file)) {
+            size_t n = fread(buffer, 1, BUFFER_SIZE, file);
+            if (n < 0) {
+                perror("read error!\n");
+                break;
             }
-            content += n;
-            content_len -= n;
+            ssize_t write_len = 0;
+            while (write_len < n) {
+                ssize_t ret = write(clnt_sock, buffer + write_len, n - write_len);
+                if (ret < 0) {
+                    perror("write error!\n");
+                    break;
+                }
+                write_len += ret;
+            }
         }
     }
     // 关闭客户端套接字
@@ -283,7 +275,8 @@ end:
     free(path);
     free(response);
     free(version);
-    //free(content);
+    if(file != NULL)
+        free(file);
     return;
 }
 
@@ -306,7 +299,7 @@ void *thread_func(void* arg)
         }
         // 处理任务
         handle_clnt(clnt_sock);
-        close(clnt_sock);
+        //close(clnt_sock);
     }
     return NULL;
 }
