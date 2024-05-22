@@ -2,6 +2,8 @@
 
 ## 编译运行方法
 
+本次实验我实现的选做部分有**线程池机制和select函数实现的I/O复用**。
+
 在`./lab3/src`目录下，使用`make`或`make all`命令，生成线程池机制实现的`server`，使用`make io`命令，生成使用`select`函数实现的`server_select`。即：
 
 ```makefile
@@ -121,6 +123,8 @@ typedef struct thread_pool {
 
 ### Siege测试
 
+**注：下面展示的各项测试均是在WSL中完成，在虚拟机中运行的结果会有所不同（甚至会出现卡顿，命中率下降等问题），应是性能不同的原因。**
+
 #### 小文件测试
 
 命令：`siege -c 50 -r 10 http://127.0.0.1:8000/index.html`
@@ -148,3 +152,8 @@ typedef struct thread_pool {
 使用select函数的服务器：
 
 ![select](./figs/siege_select.png)
+
+### 结果分析
+
+由上面的测试结果可以看出，两个版本的服务器均能正确处理各种请求，包括对正确请求的正常响应与对错误请求的报错，也能正常读取较大文件，且两个服务器的命中率均可达100%。其中使用线程池机制的服务器性能较好，`transaction rate`可达`114.94 trans/sec`，`throughput`可达`137.93 MB/sec`，而使用`select`函数的服务器性能稍逊，`transaction rate`只有`23.51 trans/sec`，`throughput`只有`28.21 MB/sec`。如果换用性能更好的`epoll`函数应该可以进一步提升性能。
+
