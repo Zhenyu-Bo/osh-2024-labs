@@ -123,7 +123,7 @@ typedef struct thread_pool {
 
 ### Siege测试
 
-**注：下面展示的各项测试均是在WSL中完成，在虚拟机中运行的结果会有所不同（甚至会出现卡顿，命中率下降等问题），应是性能不同的原因。**
+**注：下面展示的各项测试均是在WSL中完成，在虚拟机中运行的结果会有所不同（在虚拟机中运行时，线程池版本的服务器会卡顿，但是使用select函数的服务器性能远超在WSL中运行的情况），应是配置不同的原因。**
 
 #### 小文件测试
 
@@ -155,5 +155,9 @@ typedef struct thread_pool {
 
 ### 结果分析
 
-由上面的测试结果可以看出，两个版本的服务器均能正确处理各种请求，包括对正确请求的正常响应与对错误请求的报错，也能正常读取较大文件，且两个服务器的命中率均可达100%。其中使用线程池机制的服务器性能较好，`transaction rate`可达`114.94 trans/sec`，`throughput`可达`137.93 MB/sec`，而使用`select`函数的服务器性能稍逊，`transaction rate`只有`23.51 trans/sec`，`throughput`只有`28.21 MB/sec`。如果换用性能更好的`epoll`函数应该可以进一步提升性能。
+由上面的测试结果可以看出，两个版本的服务器均能正确处理各种请求，包括对正确请求的正常响应与对错误请求的报错，也能正常读取较大文件，且两个服务器均能处理高并发的情况，命中率均可达100%。其中使用线程池机制的服务器性能较好，用小文件测试时，`transaction rate`可达`2941.18 trans/sec`，用大文件测试时，`transaction rate`也可达`114.94 trans/sec`，`throughput`可达`137.93 MB/sec`；而使用`select`函数的服务器性能稍逊，用小文件测试时，`transaction rate`可达`757.58 trans/sec`，用大文件测试时，`transaction rate`只有`23.51 trans/sec`，`throughput`只有`28.21 MB/sec`。如果换用性能更好的`epoll`函数应该可以进一步提升性能。
+
+（在虚拟机中测试时，对于使用`select`函数的服务器，用小文件测试时`transaction rate`可达`4545.45 trans/sec`，用大文件测试时`transaction rate`也可达`485.44 trans/sec`，`throughput`可达`582.52 MB/sec`。但是线程池版本的服务器却会卡顿，应是配置不同的原因。）
+
+
 
